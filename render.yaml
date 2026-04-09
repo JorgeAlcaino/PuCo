@@ -2,10 +2,19 @@ services:
   - type: web
     name: puco
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.33.0 sh - || npm install -g pnpm
+      export PATH="$HOME/.local/share/pnpm:$PATH"
+      pnpm install
+      pnpm run build
+      pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0
       - key: FLASK_ENV
         value: production
+      - key: NODE_VERSION
+        value: 22.0.0
+      - key: MERCADO_PUBLICO_TICKET
+        sync: false

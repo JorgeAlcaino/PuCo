@@ -32,15 +32,11 @@ async function fetchOrdenesCompra(filtros: {
   region: string;
   sortField: string;
   sortOrder: string;
-  fechaInicio: string;
-  fechaFin: string;
 }): Promise<{ total: number; listado: OrdenCompra[] }> {
   const params = new URLSearchParams();
   if (filtros.busqueda) params.set('busqueda', filtros.busqueda);
   if (filtros.estado && filtros.estado !== 'Todos') params.set('estado', filtros.estado);
   if (filtros.region && filtros.region !== 'Todas') params.set('region', filtros.region);
-  if (filtros.fechaInicio) params.set('fechaInicio', filtros.fechaInicio);
-  if (filtros.fechaFin) params.set('fechaFin', filtros.fechaFin);
   params.set('sortField', filtros.sortField);
   params.set('sortOrder', filtros.sortOrder);
 
@@ -70,11 +66,9 @@ export function OrdenesCompra() {
   const [busqueda, setBusqueda] = useState('');
   const [estadoFilter, setEstadoFilter] = useState('Todos');
   const [regionFilter, setRegionFilter] = useState('Todas');
-  const [sortField, setSortField] = useState<'monto' | 'fechaEmision'>('fechaEmision');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sortField, setSortField] = useState<'monto' | 'codigo'>('codigo');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [showFilters, setShowFilters] = useState(true);
-  const [fechaInicio, setFechaInicio] = useState('');
-  const [fechaFin, setFechaFin] = useState('');
 
   const [ordenesCompra, setOrdenesCompra] = useState<OrdenCompra[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,7 +87,7 @@ export function OrdenesCompra() {
     setHasSearched(true);
     setError('');
     try {
-      const result = await fetchOrdenesCompra({ busqueda, estado: estadoFilter, region: regionFilter, sortField, sortOrder, fechaInicio, fechaFin });
+      const result = await fetchOrdenesCompra({ busqueda, estado: estadoFilter, region: regionFilter, sortField, sortOrder });
       setOrdenesCompra(result.listado);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error desconocido');
@@ -163,7 +157,7 @@ export function OrdenesCompra() {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-6 gap-4 pt-4 border-t border-border">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-border">
               <div>
                 <label className="block text-sm mb-2">Estado</label>
                 <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value)}
@@ -180,9 +174,9 @@ export function OrdenesCompra() {
               </div>
               <div>
                 <label className="block text-sm mb-2">Ordenar por</label>
-                <select value={sortField} onChange={(e) => setSortField(e.target.value as 'monto' | 'fechaEmision')}
+                <select value={sortField} onChange={(e) => setSortField(e.target.value as 'monto' | 'codigo')}
                   className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="fechaEmision">Fecha Emision</option>
+                  <option value="codigo">Codigo</option>
                   <option value="monto">Monto</option>
                 </select>
               </div>
@@ -190,19 +184,9 @@ export function OrdenesCompra() {
                 <label className="block text-sm mb-2">Orden</label>
                 <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
                   className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="desc">Descendente</option>
                   <option value="asc">Ascendente</option>
+                  <option value="desc">Descendente</option>
                 </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Desde</label>
-                <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Hasta</label>
-                <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
             </div>
           )}
@@ -218,8 +202,8 @@ export function OrdenesCompra() {
       {!hasSearched && !error && (
         <div className="text-center py-16">
           <Package className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-          <h3 className="mb-2">Configura tus filtros y presiona Buscar</h3>
-          <p className="text-muted-foreground">Consulta ordenes de compra en tiempo real desde la API del Mercado Publico</p>
+          <h3 className="mb-2">Ingresa un termino de busqueda</h3>
+          <p className="text-muted-foreground">Escribe un producto o servicio (ej: "computador", "aseo") y presiona Buscar</p>
         </div>
       )}
 

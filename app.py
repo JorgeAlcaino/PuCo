@@ -234,32 +234,11 @@ def get_ordenes_compra():
     if not TICKET:
         return jsonify({"error": "API ticket no configurado en el servidor"}), 503
 
-    params = {"ticket": TICKET}
+    busqueda = request.args.get("busqueda", "").strip()
+    if not busqueda:
+        return jsonify({"total": 0, "listado": []})
 
-    estado = request.args.get("estado", "")
-    if estado and estado != "Todos":
-        codigo = ESTADO_OC_TO_CODE.get(estado)
-        if codigo:
-            params["estado"] = codigo
-
-    busqueda = request.args.get("busqueda", "")
-    if busqueda:
-        params["nombre"] = busqueda
-
-    tipo = request.args.get("tipo", "")
-    if tipo:
-        params["tipo"] = tipo
-
-    fecha_inicio = _to_mp_date(request.args.get("fechaInicio", ""))
-    fecha_fin = _to_mp_date(request.args.get("fechaFin", ""))
-    if fecha_inicio:
-        params["fechaInicio"] = fecha_inicio
-    if fecha_fin:
-        params["fechaFin"] = fecha_fin
-    if not busqueda and not fecha_inicio:
-        fi, ff = _default_date_range(30)
-        params["fechaInicio"] = fi
-        params["fechaFin"] = ff
+    params = {"ticket": TICKET, "nombre": busqueda}
 
     ck = cache_key_from_params("oc", params)
     cached = cache.get(ck)
@@ -267,7 +246,7 @@ def get_ordenes_compra():
         return jsonify(cached)
 
     try:
-        data = call_mp_api("OrdenCompra.json", params)
+        data = call_mp_api("ordenesdecompra.json", params)
     except requests.Timeout:
         return jsonify({"error": "La API del Mercado Público tardó demasiado"}), 504
     except requests.HTTPError as e:
@@ -280,23 +259,20 @@ def get_ordenes_compra():
     except requests.RequestException as e:
         return jsonify({"error": str(e)}), 502
 
-    listado = [normalize_orden_compra(o) for o in (data.get("Listado") or [])]
+    # API returns a list directly (not a dict with Listado key)
+    raw_list = data if isinstance(data, list) else (data.get("Listado") or [])
+    listado = [normalize_orden_compra(o) for o in raw_list]
+
+    # Client-side estado filter
+    estado = request.args.get("estado", "")
+    if estado and estado != "Todos":
+        listado = [r for r in listado if r.get("estado", "").lower() == estado.lower()]
 
     region = request.args.get("region", "")
     if region and region != "Todas":
         listado = [r for r in listado if region.lower() in r["region"].lower()]
 
-    # Extra client-side text filtering on proveedor/codigo
-    if busqueda:
-        low = busqueda.lower()
-        listado = [
-            r for r in listado
-            if low in r.get("producto", "").lower()
-            or low in r.get("codigo", "").lower()
-            or low in r.get("proveedor", "").lower()
-        ]
-
-    sort_field = request.args.get("sortField", "fechaEmision")
+    sort_field = request.args.get("sortField", "codigo")
     if sort_field == "monto":
         listado.sort(key=lambda x: x.get("monto") or 0, reverse=request.args.get("sortOrder", "desc") == "desc")
     else:

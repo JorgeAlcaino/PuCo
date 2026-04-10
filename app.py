@@ -603,7 +603,10 @@ def health():
 @app.route("/<path:path>")
 def serve(path):
     if not os.path.isdir(DIST_DIR):
-        return jsonify({"error": "dist/ folder not found. Frontend build may have failed."}), 500
+        return jsonify({"error": "dist/ folder not found. Frontend build may have failed.",
+                        "dist_dir": DIST_DIR,
+                        "cwd": os.getcwd(),
+                        "files_in_cwd": os.listdir(os.getcwd())}), 500
     full_path = os.path.join(DIST_DIR, path)
     if path and os.path.exists(full_path):
         return send_from_directory(DIST_DIR, path)

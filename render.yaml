@@ -3,9 +3,8 @@ services:
     name: puco
     runtime: python
     buildCommand: |
-      curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=10.33.0 sh - || npm install -g pnpm
-      export PATH="$HOME/.local/share/pnpm:$PATH"
-      pnpm install
+      npm install -g pnpm@10.33.0
+      pnpm install --frozen-lockfile
       pnpm run build
       pip install -r requirements.txt
     startCommand: gunicorn app:app --timeout 120 --workers 1

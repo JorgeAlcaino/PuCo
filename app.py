@@ -596,12 +596,14 @@ def get_orden_compra_detail(codigo):
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "healthy"}), 200
+    return jsonify({"status": "healthy", "dist_exists": os.path.isdir(DIST_DIR)}), 200
 
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve(path):
+    if not os.path.isdir(DIST_DIR):
+        return jsonify({"error": "dist/ folder not found. Frontend build may have failed."}), 500
     full_path = os.path.join(DIST_DIR, path)
     if path and os.path.exists(full_path):
         return send_from_directory(DIST_DIR, path)

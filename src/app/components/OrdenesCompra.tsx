@@ -1,4 +1,5 @@
 ﻿import { useState, useMemo, useCallback, Fragment } from 'react';
+import { useApiKey } from '../context/ApiKeyContext';
 import { Search, Filter, TrendingUp, Calendar, DollarSign, Package, ChevronDown, ChevronUp, CheckCircle2, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, Truck, CreditCard, Hash, Clock, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -59,7 +60,7 @@ async function fetchOrdenesCompra(filtros: {
   sortField: string;
   sortOrder: string;
   fechaInicio: string;
-}, signal?: AbortSignal): Promise<{ total: number; listado: OrdenCompra[] }> {
+}, apiKey: string, signal?: AbortSignal): Promise<{ total: number; listado: OrdenCompra[] }> {
   const params = new URLSearchParams();
   if (filtros.busqueda) params.set('busqueda', filtros.busqueda);
   if (filtros.codigo) params.set('codigo', filtros.codigo);
@@ -70,7 +71,10 @@ async function fetchOrdenesCompra(filtros: {
   params.set('sortField', filtros.sortField);
   params.set('sortOrder', filtros.sortOrder);
 
-  const resp = await fetch(`/api/ordenes-compra?${params.toString()}`, { signal });
+  const headers: Record<string, string> = {};
+  if (apiKey) headers['X-MP-Ticket'] = apiKey;
+
+  const resp = await fetch(`/api/ordenes-compra?${params.toString()}`, { signal, headers });
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `Error HTTP ${resp.status}`);
   return data;
@@ -93,9 +97,11 @@ interface OrdenCompraDetail extends OrdenCompra {
   _loaded: true;
 }
 
-async function fetchOCDetail(codigo: string, retries = 2): Promise<OrdenCompraDetail> {
+async function fetchOCDetail(codigo: string, apiKey: string, retries = 2): Promise<OrdenCompraDetail> {
+  const headers: Record<string, string> = {};
+  if (apiKey) headers['X-MP-Ticket'] = apiKey;
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const resp = await fetch(`/api/orden-compra/${encodeURIComponent(codigo)}`);
+    const resp = await fetch(`/api/orden-compra/${encodeURIComponent(codigo)}`, { headers });
     if (resp.status === 504 || resp.status === 429) {
       if (attempt < retries) { await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); continue; }
     }
@@ -107,6 +113,7 @@ async function fetchOCDetail(codigo: string, retries = 2): Promise<OrdenCompraDe
 }
 
 export function OrdenesCompra() {
+  const { apiKey } = useApiKey();
   const [busqueda, setBusqueda] = useState('');
   const [codigoFilter, setCodigoFilter] = useState('');
   const [estadoFilter, setEstadoFilter] = useState('Todos');
@@ -134,6 +141,10 @@ export function OrdenesCompra() {
   const abortRef = useState<AbortController | null>(null);
 
   const handleBuscar = async () => {
+    if (!apiKey) {
+      setError('Debes configurar tu API key de Mercado Público antes de buscar.');
+      return;
+    }
     abortRef[0]?.abort();
     const controller = new AbortController();
     abortRef[1](controller);
@@ -149,7 +160,7 @@ export function OrdenesCompra() {
         busqueda, codigo: codigoFilter, estado: estadoFilter,
         region: 'Todas', tipo: tipoFilter, sortField, sortOrder,
         fechaInicio,
-      }, controller.signal);
+      }, apiKey, controller.signal);
       setOrdenesCompra(result.listado);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -172,14 +183,14 @@ export function OrdenesCompra() {
     setDetailError('');
     setDetailData(null);
     try {
-      const detail = await fetchOCDetail(codigo);
+      const detail = await fetchOCDetail(codigo, apiKey);
       setDetailData(detail);
     } catch (err: unknown) {
       setDetailError(err instanceof Error ? err.message : 'Error al cargar detalle');
     } finally {
       setDetailLoading(false);
     }
-  }, [expandedCodigo]);
+  }, [expandedCodigo, apiKey]);
 
   const estadoStats = useMemo(() => {
     const stats: Record<string, number> = {};

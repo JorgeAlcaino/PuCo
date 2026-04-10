@@ -27,7 +27,6 @@ MP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json",
 }
-TICKET = os.environ.get("MERCADO_PUBLICO_TICKET", "")
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -369,10 +368,11 @@ def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str) -> None:
 
 @app.route("/api/licitaciones")
 def get_licitaciones():
-    if not TICKET:
-        return jsonify({"error": "API ticket no configurado en el servidor"}), 503
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
-    mp_params = {"ticket": TICKET}
+    mp_params = {"ticket": ticket}
     all_args = dict(request.args)
 
     # --- Búsqueda por código específico (fast path, returns 1 result) ---
@@ -452,8 +452,9 @@ def get_job(job_id: str):
 
 @app.route("/api/ordenes-compra")
 def get_ordenes_compra():
-    if not TICKET:
-        return jsonify({"error": "API ticket no configurado en el servidor"}), 503
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
     # --- Búsqueda por código específico de OC (endpoint singular) ---
     codigo = request.args.get("codigo", "").strip()
@@ -463,7 +464,7 @@ def get_ordenes_compra():
         if cached is not None:
             return jsonify(cached)
         try:
-            data = call_mp_api("ordenesdecompra.json", {"codigo": codigo, "ticket": TICKET})
+            data = call_mp_api("ordenesdecompra.json", {"codigo": codigo, "ticket": ticket})
         except requests.Timeout:
             return jsonify({"error": "La API del Mercado Público tardó demasiado"}), 504
         except requests.HTTPError as e:
@@ -483,7 +484,7 @@ def get_ordenes_compra():
         return jsonify(output)
 
     # --- Listing by date (required) + optional estado ---
-    params = {"ticket": TICKET}
+    params = {"ticket": ticket}
 
     fecha = _iso_to_mp_date(request.args.get("fechaInicio", ""))
     if not fecha:
@@ -549,14 +550,15 @@ def get_ordenes_compra():
 @app.route("/api/licitacion/<codigo>")
 def get_licitacion_detail(codigo):
     """Fetch full details for a single licitacion by its code."""
-    if not TICKET:
-        return jsonify({"error": "API ticket no configurado"}), 503
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("lic_detail", {"codigo": codigo})
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
     try:
-        data = call_mp_api("licitaciones.json", {"ticket": TICKET, "codigo": codigo})
+        data = call_mp_api("licitaciones.json", {"ticket": ticket, "codigo": codigo})
     except requests.Timeout:
         return jsonify({"error": "Timeout"}), 504
     except (requests.HTTPError, RuntimeError, requests.RequestException) as e:
@@ -572,14 +574,15 @@ def get_licitacion_detail(codigo):
 @app.route("/api/orden-compra/<path:codigo>")
 def get_orden_compra_detail(codigo):
     """Fetch full details for a single OC by its code."""
-    if not TICKET:
-        return jsonify({"error": "API ticket no configurado"}), 503
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("oc_detail", {"codigo": codigo})
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
     try:
-        data = call_mp_api("ordenesdecompra.json", {"ticket": TICKET, "codigo": codigo})
+        data = call_mp_api("ordenesdecompra.json", {"ticket": ticket, "codigo": codigo})
     except requests.Timeout:
         return jsonify({"error": "Timeout"}), 504
     except (requests.HTTPError, RuntimeError, requests.RequestException) as e:

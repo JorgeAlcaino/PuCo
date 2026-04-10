@@ -3,9 +3,11 @@ import { ThemeProvider } from 'next-themes';
 import { Navbar } from './components/Navbar';
 import { Licitaciones } from './components/Licitaciones';
 import { OrdenesCompra } from './components/OrdenesCompra';
+import { ApiKeyProvider } from './context/ApiKeyContext';
 
 export default function App() {
   return (
+    <ApiKeyProvider>
     <ThemeProvider attribute="class" defaultTheme="light">
       <BrowserRouter>
         <div className="min-h-screen bg-background">
@@ -20,5 +22,6 @@ export default function App() {
         </div>
       </BrowserRouter>
     </ThemeProvider>
+    </ApiKeyProvider>
   );
 }

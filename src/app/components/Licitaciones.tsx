@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, Fragment } from 'react';
+import { useApiKey } from '../context/ApiKeyContext';
 import { Search, Filter, TrendingUp, Calendar, ChevronDown, ChevronUp, FileText, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, DollarSign, Info, Hash, Clock, Users, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -66,7 +67,7 @@ async function fetchLicitaciones(filtros: {
   sortField: string;
   sortOrder: string;
   fechaInicio: string;
-}, signal?: AbortSignal, onPending?: () => void): Promise<{ total: number; listado: Licitacion[] }> {
+}, apiKey: string, signal?: AbortSignal, onPending?: () => void): Promise<{ total: number; listado: Licitacion[] }> {
   const params = new URLSearchParams();
   if (filtros.busqueda) params.set('busqueda', filtros.busqueda);
   if (filtros.codigo) params.set('codigo', filtros.codigo);
@@ -77,8 +78,11 @@ async function fetchLicitaciones(filtros: {
   params.set('sortField', filtros.sortField);
   params.set('sortOrder', filtros.sortOrder);
 
+  const headers: Record<string, string> = {};
+  if (apiKey) headers['X-MP-Ticket'] = apiKey;
+
   const url = `/api/licitaciones?${params.toString()}`;
-  const resp = await fetch(url, { signal });
+  const resp = await fetch(url, { signal, headers });
 
   if (resp.status === 202) {
     const { jobId } = await resp.json();
@@ -87,7 +91,7 @@ async function fetchLicitaciones(filtros: {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       await new Promise(r => setTimeout(r, 3000));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const poll = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal });
+      const poll = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal, headers });
       const pollData = await poll.json();
       if (pollData.status === 'done') return pollData.data;
       if (pollData.status === 'error') throw new Error(pollData.error || 'Error del servidor');
@@ -120,9 +124,11 @@ interface LicitacionDetail extends Licitacion {
   _loaded: true;
 }
 
-async function fetchLicitacionDetail(codigo: string, retries = 2): Promise<LicitacionDetail> {
+async function fetchLicitacionDetail(codigo: string, apiKey: string, retries = 2): Promise<LicitacionDetail> {
+  const headers: Record<string, string> = {};
+  if (apiKey) headers['X-MP-Ticket'] = apiKey;
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const resp = await fetch(`/api/licitacion/${encodeURIComponent(codigo)}`);
+    const resp = await fetch(`/api/licitacion/${encodeURIComponent(codigo)}`, { headers });
     if (resp.status === 504 || resp.status === 429) {
       if (attempt < retries) { await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); continue; }
     }
@@ -134,6 +140,7 @@ async function fetchLicitacionDetail(codigo: string, retries = 2): Promise<Licit
 }
 
 export function Licitaciones() {
+  const { apiKey } = useApiKey();
   const [busqueda, setBusqueda] = useState('');
   const [codigoFilter, setCodigoFilter] = useState('');
   const [estadoFilter, setEstadoFilter] = useState('Todos');
@@ -169,6 +176,10 @@ export function Licitaciones() {
   const abortRef = useState<AbortController | null>(null);
 
   const handleBuscar = async () => {
+    if (!apiKey) {
+      setError('Debes configurar tu API key de Mercado Público antes de buscar.');
+      return;
+    }
     abortRef[0]?.abort();
     const controller = new AbortController();
     abortRef[1](controller);
@@ -185,7 +196,7 @@ export function Licitaciones() {
         busqueda, codigo: codigoFilter, estado: estadoFilter,
         region: regionFilter, tipo: tipoFilter, sortField, sortOrder,
         fechaInicio,
-      }, controller.signal, () => setIsSlow(true));
+      }, apiKey, controller.signal, () => setIsSlow(true));
       setLicitaciones(result.listado);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -209,14 +220,14 @@ export function Licitaciones() {
     setDetailError('');
     setDetailData(null);
     try {
-      const detail = await fetchLicitacionDetail(codigo);
+      const detail = await fetchLicitacionDetail(codigo, apiKey);
       setDetailData(detail);
     } catch (err: unknown) {
       setDetailError(err instanceof Error ? err.message : 'Error al cargar detalle');
     } finally {
       setDetailLoading(false);
     }
-  }, [expandedCodigo]);
+  }, [expandedCodigo, apiKey]);
 
   const estadoStats = useMemo(() => {
     const stats: Record<string, number> = {};

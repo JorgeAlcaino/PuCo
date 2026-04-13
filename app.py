@@ -1,10 +1,11 @@
 import os
+import json as _json
 import uuid
 import hashlib
 import time
 import threading
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -40,6 +41,10 @@ ESTADO_LIC_BY_CODE = {
     "6": "Cerrada",
     "7": "Desierta",
     "8": "Adjudicada",
+    "9": "Desierta",
+    "14": "En evaluación",
+    "15": "En evaluación",
+    "16": "Suspendida",
     "18": "Revocada",
     "19": "Suspendida",
 }
@@ -58,10 +63,13 @@ ESTADO_OC_BY_CODE = {
     "1": "Enviada al Proveedor",
     "2": "Aceptada",
     "3": "Cancelada",
+    "4": "Recibida",
+    "5": "Enviada al Proveedor",
     "6": "Recepción Conforme",
     "7": "Pendiente",
     "8": "Parcialmente Recepcionada",
     "9": "Recepción Incompleta",
+    "10": "Anulada",
     "12": "En Proceso",
 }
 
@@ -165,13 +173,16 @@ def normalize_licitacion(lic: dict) -> dict:
         "cantidadItems": items.get("Cantidad", 0) if isinstance(items, dict) else 0,
         "diasCierreLicitacion": lic.get("DiasCierreLicitacion", 0),
         "adjudicacionNumeroOferentes": adjudicacion.get("NumeroOferentes", 0),
-        "urlDetalle": f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?qs={codigo}",
+        "urlDetalle": f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?IdLicitacion={codigo}",
     }
 
 
 TIPO_OC_BY_CODE = {
     "8": "SE",
     "9": "CM",
+    "10": "AG",
+    "11": "TD",
+    "12": "CC",
 }
 
 TIPO_MONEDA_MAP = {
@@ -208,6 +219,11 @@ def normalize_orden_compra(oc: dict) -> dict:
     items = oc.get("Items") or {}
     codigo = oc.get("Codigo", "")
     estado_code = str(oc.get("CodigoEstado", ""))
+    estado_raw = oc.get("EstadoNombre") or oc.get("Estado") or ""
+    if isinstance(estado_raw, str) and estado_raw and not estado_raw.isdigit():
+        estado = estado_raw
+    else:
+        estado = ESTADO_OC_BY_CODE.get(estado_code, f"Estado {estado_code}" if estado_code else "Desconocido")
     tipo_code = str(oc.get("CodigoTipo") or "")
     tipo_text = TIPO_OC_BY_CODE.get(tipo_code, oc.get("Tipo", "")) or _extract_tipo_from_codigo(codigo)
     tipo_moneda = oc.get("TipoMoneda", "")
@@ -220,7 +236,7 @@ def normalize_orden_compra(oc: dict) -> dict:
         "proveedor": proveedor.get("Nombre", ""),
         "rutProveedor": proveedor.get("RutSucursal", ""),
         "organismo": comprador.get("NombreOrganismo", ""),
-        "estado": ESTADO_OC_BY_CODE.get(estado_code, f"Estado {estado_code}"),
+        "estado": estado,
         "estadoProveedor": oc.get("EstadoProveedor", ""),
         "tipo": tipo_text,
         "tipoMoneda": tipo_moneda,
@@ -241,13 +257,122 @@ def normalize_orden_compra(oc: dict) -> dict:
         "formaPago": FORMA_PAGO_MAP.get(forma_pago, forma_pago),
         "financiamiento": oc.get("Financiamiento", ""),
         "codigoLicitacion": oc.get("CodigoLicitacion", ""),
-        "urlDetalle": f"https://www.mercadopublico.cl/Procurement/Modules/PO/DetailsPurchaseOrder.aspx?qs={codigo}",
+        "urlDetalle": f"https://www.mercadopublico.cl/PurchaseOrder/Modules/PO/DetailsPurchaseOrder.aspx?codigoOC={codigo}",
     }
 
 
 def cache_key_from_params(prefix: str, params: dict) -> str:
     raw = f"{prefix}_{sorted(params.items())}"
     return hashlib.md5(raw.encode()).hexdigest()
+
+
+# ── CodigoUnidad → Region persistent cache ───────────────────────────────────
+
+_UNIDAD_REGION_FILE = os.path.join(os.path.dirname(__file__), ".unidad_region_cache.json")
+_unidad_region_cache: dict = {}
+_unidad_region_lock = threading.Lock()
+
+
+def _load_unidad_cache():
+    global _unidad_region_cache
+    if os.path.exists(_UNIDAD_REGION_FILE):
+        try:
+            with open(_UNIDAD_REGION_FILE, "r", encoding="utf-8") as f:
+                _unidad_region_cache = _json.load(f)
+        except Exception:
+            _unidad_region_cache = {}
+
+
+def _save_unidad_cache():
+    try:
+        with open(_UNIDAD_REGION_FILE, "w", encoding="utf-8") as f:
+            _json.dump(_unidad_region_cache, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _enrich_regions(listado: list, ticket: str) -> None:
+    """Populate region field for list-API results by fetching detail for unknown CodigoUnidad."""
+    unknown: dict = {}  # unidad_code -> list of items needing region
+    for item in listado:
+        codigo = item.get("codigo", "")
+        unidad = codigo.split("-")[0] if "-" in codigo else ""
+        if not unidad:
+            continue
+        with _unidad_region_lock:
+            cached = _unidad_region_cache.get(unidad)
+        if cached is not None:
+            if cached != "_empty":
+                item["region"] = cached
+        else:
+            unknown.setdefault(unidad, []).append(item)
+
+    # Batch-fetch details for unknown unidades
+    enriched = 0
+    for unidad, items in list(unknown.items()):
+        sample_codigo = items[0].get("codigo", "")
+        try:
+            data = call_mp_api("licitaciones.json", {"ticket": ticket, "codigo": sample_codigo})
+            detail_list = data.get("Listado") or []
+            if detail_list:
+                comprador = detail_list[0].get("Comprador") or {}
+                region = (comprador.get("RegionUnidad", "") or "").strip()
+                with _unidad_region_lock:
+                    _unidad_region_cache[unidad] = region or "_empty"
+                if region:
+                    for item in items:
+                        item["region"] = region
+            else:
+                with _unidad_region_lock:
+                    _unidad_region_cache[unidad] = "_empty"
+            enriched += 1
+        except Exception:
+            pass
+    if enriched > 0:
+        _save_unidad_cache()
+
+
+def _enrich_regions_oc(listado: list, ticket: str) -> None:
+    """Populate region field for OC list-API results by fetching detail for unknown units."""
+    unknown: dict = {}  # unidad_code -> list of items needing region
+    for item in listado:
+        codigo = item.get("codigo", "")
+        unidad = codigo.split("-")[0] if "-" in codigo else ""
+        if not unidad:
+            continue
+        with _unidad_region_lock:
+            cached = _unidad_region_cache.get(unidad)
+        if cached is not None:
+            if cached != "_empty":
+                item["region"] = cached
+        else:
+            unknown.setdefault(unidad, []).append(item)
+
+    enriched = 0
+    for unidad, items in list(unknown.items()):
+        sample_codigo = items[0].get("codigo", "")
+        try:
+            data = call_mp_api("ordenesdecompra.json", {"ticket": ticket, "codigo": sample_codigo})
+            raw = data if isinstance(data, list) else (data.get("Listado") or [])
+            if raw:
+                comprador = raw[0].get("Comprador") or {}
+                region = (comprador.get("RegionUnidad", "") or "").strip()
+                with _unidad_region_lock:
+                    _unidad_region_cache[unidad] = region or "_empty"
+                if region:
+                    for item in items:
+                        item["region"] = region
+            else:
+                with _unidad_region_lock:
+                    _unidad_region_cache[unidad] = "_empty"
+            enriched += 1
+        except Exception:
+            pass
+    if enriched > 0:
+        _save_unidad_cache()
+
+
+_load_unidad_cache()
 
 
 # Serialize API calls to avoid concurrent-request rejections from MP API
@@ -317,21 +442,41 @@ def _iso_to_mp_date(iso_date: str) -> str:
     return iso_date
 
 
+MAX_DATE_RANGE_DAYS = 31
+
+
+def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
+    """Return a list of ddmmyyyy strings for each day in [inicio, fin], max MAX_DATE_RANGE_DAYS days."""
+    if not fecha_inicio_iso or not fecha_fin_iso:
+        return []
+    try:
+        start = datetime.strptime(fecha_inicio_iso, "%Y-%m-%d")
+        end = datetime.strptime(fecha_fin_iso, "%Y-%m-%d")
+    except ValueError:
+        return []
+    if end < start:
+        start, end = end, start
+    days = (end - start).days + 1
+    if days > MAX_DATE_RANGE_DAYS:
+        days = MAX_DATE_RANGE_DAYS
+        end = start + timedelta(days=days - 1)
+    return [(start + timedelta(days=i)).strftime("%d%m%Y") for i in range(days)]
+
+
 # ── API routes ───────────────────────────────────────────────────────────────
 
 def _apply_filters_and_sort(listado: list, args: dict) -> list:
-    """Apply client-side filters (region, busqueda, tipo) and sort to a licitacion list."""
+    """Apply client-side filters (busqueda, tipo, region) and sort to a licitacion list."""
     busqueda = args.get("busqueda", "").strip().lower()
     if busqueda:
         listado = [r for r in listado if busqueda in r["nombre"].lower()
-                   or busqueda in r["organismo"].lower()
                    or busqueda in r["codigo"].lower()]
     tipo = args.get("tipo", "")
     if tipo:
         listado = [r for r in listado if r["tipo"] == tipo]
-    region = args.get("region", "")
-    if region and region != "Todas":
-        listado = [r for r in listado if region.lower() in r["region"].lower()]
+    region = args.get("region", "").strip()
+    if region:
+        listado = [r for r in listado if region.lower() in (r.get("region") or "").lower()]
     sort_field = args.get("sortField", "fechaPublicacion")
     reverse = args.get("sortOrder", "desc") == "desc"
     if sort_field == "monto":
@@ -341,17 +486,37 @@ def _apply_filters_and_sort(listado: list, args: dict) -> list:
     return listado
 
 
-def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str) -> None:
-    """Background thread: calls MP API, applies filters, stores result in job store and cache."""
+def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_range: list[str] | None = None) -> None:
+    """Background thread: calls MP API (one or multiple days), enriches regions, applies filters, stores result."""
     try:
-        data = call_mp_api("licitaciones.json", mp_params)
-        listado = [normalize_licitacion(l) for l in (data.get("Listado") or [])]
-        listado = _apply_filters_and_sort(listado, all_args)
-        output = {"total": len(listado), "listado": listado}
+        dates = date_range or [mp_params.get("fecha", "")]
+        all_listado = []
+        seen_codes: set = set()
+        for idx, fecha in enumerate(dates):
+            params = {**mp_params, "fecha": fecha}
+            data = call_mp_api("licitaciones.json", params)
+            for lic in (data.get("Listado") or []):
+                item = normalize_licitacion(lic)
+                if item["codigo"] not in seen_codes:
+                    seen_codes.add(item["codigo"])
+                    all_listado.append(item)
+            # Emit partial results so frontend can display early
+            if len(dates) > 1 and idx < len(dates) - 1:
+                partial = _apply_filters_and_sort(list(all_listado), all_args)
+                with _jobs_lock:
+                    _jobs[job_id]["partial"] = {"total": len(partial), "listado": partial,
+                                                "progress": idx + 1, "totalDays": len(dates)}
+        # Enrich region from detail API for items that lack it
+        ticket = mp_params.get("ticket", "")
+        if ticket:
+            _enrich_regions(all_listado, ticket)
+        all_listado = _apply_filters_and_sort(all_listado, all_args)
+        output = {"total": len(all_listado), "listado": all_listado}
         with app.app_context():
             cache.set(ck, output)
         with _jobs_lock:
             _jobs[job_id].update({"status": "done", "data": output})
+            _jobs[job_id].pop("partial", None)
     except requests.Timeout:
         with _jobs_lock:
             _jobs[job_id].update({"status": "error", "error": "La API del Mercado Público tardó demasiado"})
@@ -403,9 +568,11 @@ def get_licitaciones():
         return jsonify(output)
 
     # --- Date-based listing: slow (MP API ~50s), use background job ---
-    fecha = _iso_to_mp_date(request.args.get("fechaInicio", ""))
-    if not fecha:
-        fecha = _today_mp_date()
+    fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
+    fecha_fin_iso = request.args.get("fechaFin", "").strip()
+    date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso) if fecha_fin_iso else []
+
+    fecha = _iso_to_mp_date(fecha_inicio_iso) if fecha_inicio_iso else _today_mp_date()
     mp_params["fecha"] = fecha
 
     estado = request.args.get("estado", "")
@@ -432,7 +599,7 @@ def get_licitaciones():
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
 
-    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck), daemon=True)
+    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck, date_range or None), daemon=True)
     t.start()
     return jsonify({"status": "pending", "jobId": job_id}), 202
 
@@ -444,10 +611,78 @@ def get_job(job_id: str):
     if job is None:
         return jsonify({"error": "Job no encontrado o expirado"}), 404
     if job["status"] == "pending":
+        partial = job.get("partial")
+        if partial:
+            return jsonify({"status": "pending", "partial": partial}), 200
         return jsonify({"status": "pending"}), 200
     if job["status"] == "done":
         return jsonify({"status": "done", "data": job["data"]}), 200
     return jsonify({"status": "error", "error": job.get("error", "Error desconocido")}), 200
+
+
+def _apply_oc_filters_and_sort(listado: list, args: dict) -> list:
+    """Apply client-side filters and sort to an OC list."""
+    busqueda = args.get("busqueda", "").strip().lower()
+    if busqueda:
+        listado = [r for r in listado if busqueda in r["producto"].lower()
+                   or busqueda in r["codigo"].lower()]
+    tipo = args.get("tipo", "")
+    if tipo:
+        listado = [r for r in listado if r.get("tipo", "") == tipo]
+    region = args.get("region", "").strip()
+    if region and region != "Todas":
+        listado = [r for r in listado if region.lower() in (r.get("region") or "").lower()]
+    sort_field = args.get("sortField", "codigo")
+    reverse = args.get("sortOrder", "desc") == "desc"
+    if sort_field == "monto":
+        listado.sort(key=lambda x: x.get("monto") or 0, reverse=reverse)
+    else:
+        listado.sort(key=lambda x: x.get(sort_field) or "", reverse=reverse)
+    return listado
+
+
+def _run_oc_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_range: list[str]) -> None:
+    """Background thread: fetches OC for multiple days, merges, enriches, filters."""
+    try:
+        all_listado = []
+        seen_codes: set = set()
+        for idx, fecha in enumerate(date_range):
+            params = {**mp_params, "fecha": fecha}
+            data = call_mp_api("ordenesdecompra.json", params)
+            raw = data if isinstance(data, list) else (data.get("Listado") or [])
+            for oc in raw:
+                item = normalize_orden_compra(oc)
+                if item["codigo"] not in seen_codes:
+                    seen_codes.add(item["codigo"])
+                    all_listado.append(item)
+            # Emit partial results so frontend can display early
+            if idx < len(date_range) - 1:
+                partial = _apply_oc_filters_and_sort(list(all_listado), all_args)
+                with _jobs_lock:
+                    _jobs[job_id]["partial"] = {"total": len(partial), "listado": partial,
+                                                "progress": idx + 1, "totalDays": len(date_range)}
+        ticket = mp_params.get("ticket", "")
+        if ticket:
+            _enrich_regions_oc(all_listado, ticket)
+        all_listado = _apply_oc_filters_and_sort(all_listado, all_args)
+        output = {"total": len(all_listado), "listado": all_listado}
+        with app.app_context():
+            cache.set(ck, output)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "data": output})
+            _jobs[job_id].pop("partial", None)
+    except requests.Timeout:
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": "La API del Mercado Público tardó demasiado"})
+    except requests.HTTPError as e:
+        code = getattr(e.response, "status_code", 502)
+        msg = ("Demasiadas solicitudes simultáneas, intenta de nuevo en unos segundos"
+               if code == 429 else f"Error HTTP {code} de la API")
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": msg})
+    except Exception as e:
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(e)})
 
 
 @app.route("/api/ordenes-compra")
@@ -485,10 +720,13 @@ def get_ordenes_compra():
 
     # --- Listing by date (required) + optional estado ---
     params = {"ticket": ticket}
+    all_args = dict(request.args)
 
-    fecha = _iso_to_mp_date(request.args.get("fechaInicio", ""))
-    if not fecha:
-        fecha = _today_mp_date()
+    fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
+    fecha_fin_iso = request.args.get("fechaFin", "").strip()
+    date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso) if fecha_fin_iso else []
+
+    fecha = _iso_to_mp_date(fecha_inicio_iso) if fecha_inicio_iso else _today_mp_date()
     params["fecha"] = fecha
 
     estado = request.args.get("estado", "")
@@ -497,10 +735,25 @@ def get_ordenes_compra():
         if api_estado:
             params["estado"] = api_estado
 
-    ck = cache_key_from_params("oc", params)
+    ck = cache_key_from_params("oc", all_args)
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
+
+    # Use background job for date ranges (multi-day fetch is slow)
+    if date_range and len(date_range) > 1:
+        with _jobs_lock:
+            now = time.time()
+            for k in [k for k, v in _jobs.items() if now - v.get("ts", 0) > 600]:
+                del _jobs[k]
+            for jid, job in _jobs.items():
+                if job.get("ck") == ck and job["status"] == "pending":
+                    return jsonify({"status": "pending", "jobId": jid}), 202
+            job_id = str(uuid.uuid4())
+            _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
+        t = threading.Thread(target=_run_oc_job, args=(job_id, params, all_args, ck, date_range), daemon=True)
+        t.start()
+        return jsonify({"status": "pending", "jobId": job_id}), 202
 
     try:
         data = call_mp_api("ordenesdecompra.json", params)
@@ -519,28 +772,11 @@ def get_ordenes_compra():
     raw_list = data if isinstance(data, list) else (data.get("Listado") or [])
     listado = [normalize_orden_compra(o) for o in raw_list]
 
-    # --- Client-side filters ---
-    busqueda = request.args.get("busqueda", "").strip().lower()
-    if busqueda:
-        listado = [r for r in listado if busqueda in r["producto"].lower()
-                   or busqueda in r["proveedor"].lower()
-                   or busqueda in r["organismo"].lower()
-                   or busqueda in r["codigo"].lower()]
+    # Enrich region from detail API for items that lack it
+    if ticket:
+        _enrich_regions_oc(listado, ticket)
 
-    tipo = request.args.get("tipo", "")
-    if tipo:
-        listado = [r for r in listado if r.get("tipo", "") == tipo]
-
-    region = request.args.get("region", "")
-    if region and region != "Todas":
-        listado = [r for r in listado if region.lower() in r["region"].lower()]
-
-    sort_field = request.args.get("sortField", "codigo")
-    reverse = request.args.get("sortOrder", "desc") == "desc"
-    if sort_field == "monto":
-        listado.sort(key=lambda x: x.get("monto") or 0, reverse=reverse)
-    else:
-        listado.sort(key=lambda x: x.get(sort_field) or "", reverse=reverse)
+    listado = _apply_oc_filters_and_sort(listado, all_args)
 
     output = {"total": len(listado), "listado": listado}
     cache.set(ck, output)

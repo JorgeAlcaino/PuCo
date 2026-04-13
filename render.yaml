@@ -9,7 +9,8 @@ services:
       pnpm run build
       ls -la dist/
       pip install -r requirements.txt
-    startCommand: gunicorn app:app --timeout 120 --workers 1
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 1 --threads 4
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0

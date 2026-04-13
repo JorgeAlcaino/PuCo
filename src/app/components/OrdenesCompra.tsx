@@ -1,5 +1,6 @@
 ﻿import { useState, useMemo, useCallback, Fragment } from 'react';
 import { useApiKey } from '../context/ApiKeyContext';
+import { matchesEstablecimiento } from '../data/establecimientos';
 import { Search, Filter, TrendingUp, Calendar, DollarSign, Package, ChevronDown, ChevronUp, CheckCircle2, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, Truck, CreditCard, Hash, Clock, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -7,16 +8,42 @@ const ESTADO_COLORS: Record<string, string> = {
   'Enviada al Proveedor': '#3b82f6',
   'Aceptada': '#10b981',
   'Cancelada': '#ef4444',
+  'Anulada': '#dc2626',
   'Recepción Conforme': '#8b5cf6',
   'Recepción Incompleta': '#f97316',
   'Pendiente': '#f59e0b',
   'Parcialmente Recepcionada': '#6366f1',
+  'En Proceso': '#06b6d4',
+  'Recibida': '#84cc16',
 };
 
 const TIPOS_OC = [
   { value: '', label: 'Todos los tipos' },
   { value: 'SE', label: 'SE — Sin emisión automática' },
   { value: 'CM', label: 'CM — Convenio Marco' },
+  { value: 'AG', label: 'AG — Compra ágil' },
+  { value: 'TD', label: 'TD — Trato directo' },
+  { value: 'CC', label: 'CC — Compra coordinada' },
+];
+
+const REGIONES = [
+  { value: '', label: 'Todas las regiones' },
+  { value: 'Arica y Parinacota', label: 'Arica y Parinacota' },
+  { value: 'Tarapacá', label: 'Tarapacá' },
+  { value: 'Antofagasta', label: 'Antofagasta' },
+  { value: 'Atacama', label: 'Atacama' },
+  { value: 'Coquimbo', label: 'Coquimbo' },
+  { value: 'Valparaíso', label: 'Valparaíso' },
+  { value: 'Metropolitana', label: 'Metropolitana' },
+  { value: "O'Higgins", label: "O'Higgins" },
+  { value: 'Maule', label: 'Maule' },
+  { value: 'Ñuble', label: 'Ñuble' },
+  { value: 'Biobío', label: 'Biobío' },
+  { value: 'Araucanía', label: 'La Araucanía' },
+  { value: 'Los Ríos', label: 'Los Ríos' },
+  { value: 'Los Lagos', label: 'Los Lagos' },
+  { value: 'Aysén', label: 'Aysén' },
+  { value: 'Magallanes', label: 'Magallanes' },
 ];
 
 interface OrdenCompra {
@@ -60,7 +87,10 @@ async function fetchOrdenesCompra(filtros: {
   sortField: string;
   sortOrder: string;
   fechaInicio: string;
-}, apiKey: string, signal?: AbortSignal): Promise<{ total: number; listado: OrdenCompra[] }> {
+  fechaFin: string;
+}, apiKey: string, signal?: AbortSignal, onPending?: () => void,
+  onPartial?: (data: { total: number; listado: OrdenCompra[]; progress: number; totalDays: number }) => void
+): Promise<{ total: number; listado: OrdenCompra[] }> {
   const params = new URLSearchParams();
   if (filtros.busqueda) params.set('busqueda', filtros.busqueda);
   if (filtros.codigo) params.set('codigo', filtros.codigo);
@@ -68,6 +98,7 @@ async function fetchOrdenesCompra(filtros: {
   if (filtros.region && filtros.region !== 'Todas') params.set('region', filtros.region);
   if (filtros.tipo) params.set('tipo', filtros.tipo);
   if (filtros.fechaInicio) params.set('fechaInicio', filtros.fechaInicio);
+  if (filtros.fechaFin) params.set('fechaFin', filtros.fechaFin);
   params.set('sortField', filtros.sortField);
   params.set('sortOrder', filtros.sortOrder);
 
@@ -75,14 +106,30 @@ async function fetchOrdenesCompra(filtros: {
   if (apiKey) headers['X-MP-Ticket'] = apiKey;
 
   const resp = await fetch(`/api/ordenes-compra?${params.toString()}`, { signal, headers });
+
+  if (resp.status === 202) {
+    const { jobId } = await resp.json();
+    onPending?.();
+    while (true) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      await new Promise(r => setTimeout(r, 3000));
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      const poll = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal, headers });
+      const pollData = await poll.json();
+      if (pollData.status === 'done') return pollData.data;
+      if (pollData.status === 'error') throw new Error(pollData.error || 'Error del servidor');
+      if (pollData.partial) onPartial?.(pollData.partial);
+    }
+  }
+
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `Error HTTP ${resp.status}`);
   return data;
 }
 
 function exportCSV(ordenes: OrdenCompra[]) {
-  const headers = ['Código', 'Producto', 'Estado', 'Tipo'];
-  const rows = ordenes.map(o => [o.codigo, o.producto, o.estado, o.tipo]);
+  const headers = ['Código', 'Producto', 'Estado', 'Tipo', 'Región'];
+  const rows = ordenes.map(o => [o.codigo, o.producto, o.estado, o.tipo, o.region ?? '']);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -115,20 +162,24 @@ async function fetchOCDetail(codigo: string, apiKey: string, retries = 2): Promi
 export function OrdenesCompra() {
   const { apiKey } = useApiKey();
   const [busqueda, setBusqueda] = useState('');
-  const [codigoFilter, setCodigoFilter] = useState('');
   const [estadoFilter, setEstadoFilter] = useState('Todos');
   const [tipoFilter, setTipoFilter] = useState('');
+  const [regionFilter, setRegionFilter] = useState('');
   const [sortField, setSortField] = useState<'codigo' | 'producto'>('codigo');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [showFilters, setShowFilters] = useState(true);
   const [fechaInicio, setFechaInicio] = useState('');
+  const [fechaFin, setFechaFin] = useState('');
+  const [soloEstablecimientos, setSoloEstablecimientos] = useState(false);
 
   const [ordenesCompra, setOrdenesCompra] = useState<OrdenCompra[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSlow, setIsSlow] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [loadingProgress, setLoadingProgress] = useState<{ progress: number; totalDays: number } | null>(null);
 
   // Detail panel
   const [expandedCodigo, setExpandedCodigo] = useState<string | null>(null);
@@ -150,24 +201,36 @@ export function OrdenesCompra() {
     abortRef[1](controller);
 
     setIsLoading(true);
+    setIsSlow(false);
     setHasSearched(true);
     setError('');
     setCurrentPage(1);
     setExpandedCodigo(null);
     setDetailData(null);
+    setLoadingProgress(null);
     try {
+      const isCodigo = /^\d+-\d+-[A-Za-z]{2}\d+$/.test(busqueda.trim());
+      const filterEstab = (list: OrdenCompra[]) =>
+        soloEstablecimientos
+          ? list.filter(o => matchesEstablecimiento(o.producto) || (o.organismo ? matchesEstablecimiento(o.organismo) : false))
+          : list;
       const result = await fetchOrdenesCompra({
-        busqueda, codigo: codigoFilter, estado: estadoFilter,
-        region: 'Todas', tipo: tipoFilter, sortField, sortOrder,
-        fechaInicio,
-      }, apiKey, controller.signal);
-      setOrdenesCompra(result.listado);
+        busqueda: isCodigo ? '' : busqueda, codigo: isCodigo ? busqueda.trim() : '',
+        estado: estadoFilter, region: regionFilter, tipo: tipoFilter,
+        sortField, sortOrder, fechaInicio, fechaFin,
+      }, apiKey, controller.signal, () => setIsSlow(true), (partial) => {
+        setLoadingProgress({ progress: partial.progress, totalDays: partial.totalDays });
+        setOrdenesCompra(filterEstab(partial.listado));
+      });
+      setOrdenesCompra(filterEstab(result.listado));
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Error desconocido');
       setOrdenesCompra([]);
     } finally {
       setIsLoading(false);
+      setIsSlow(false);
+      setLoadingProgress(null);
     }
   };
 
@@ -227,6 +290,9 @@ export function OrdenesCompra() {
   const TIPO_OC_COLORS: Record<string, string> = {
     'SE': '#3b82f6',
     'CM': '#10b981',
+    'AG': '#f59e0b',
+    'TD': '#8b5cf6',
+    'CC': '#ef4444',
   };
 
   return (
@@ -266,14 +332,7 @@ export function OrdenesCompra() {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-border">
-              <div>
-                <label className="block text-sm mb-2">Código OC</label>
-                <input type="text" placeholder="Ej: 750301-80-SE24"
-                  value={codigoFilter} onChange={(e) => setCodigoFilter(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleBuscar()}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-border">
               <div>
                 <label className="block text-sm mb-2">Estado</label>
                 <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value)}
@@ -289,8 +348,21 @@ export function OrdenesCompra() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm mb-2">Fecha consulta</label>
+                <label className="block text-sm mb-2">Región</label>
+                <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
+                  {REGIONES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-2">Desde</label>
                 <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)}
+                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div>
+                <label className="block text-sm mb-2">Hasta</label>
+                <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
+                  min={fechaInicio || undefined}
                   className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
@@ -308,6 +380,31 @@ export function OrdenesCompra() {
                   <option value="desc">Descendente</option>
                   <option value="asc">Ascendente</option>
                 </select>
+              </div>
+              <div className="flex items-center md:col-span-3">
+                <label className="flex items-center gap-3 cursor-pointer select-none group">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={soloEstablecimientos}
+                      onChange={(e) => setSoloEstablecimientos(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${soloEstablecimientos ? 'bg-primary border-primary' : 'border-border bg-input-background group-hover:border-primary/60'}`}>
+                      {soloEstablecimientos && (
+                        <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-sm font-medium">
+                    Solo establecimientos de salud
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    — filtra resultados por el directorio de establecimientos de salud públicos
+                  </span>
+                </label>
               </div>
             </div>
           )}
@@ -328,16 +425,28 @@ export function OrdenesCompra() {
         </div>
       )}
 
-      {isLoading && (
+      {isLoading && ordenesCompra.length === 0 && (
         <div className="text-center py-16">
           <Loader2 className="w-16 h-16 mx-auto mb-4 text-primary animate-spin" />
           <h3 className="mb-2">Consultando API del Mercado Público...</h3>
-          <p className="text-muted-foreground">Obteniendo órdenes de compra según tus filtros</p>
+          {loadingProgress
+            ? <p className="text-muted-foreground">Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}...</p>
+            : isSlow
+              ? <p className="text-muted-foreground">La consulta puede tardar hasta 60 segundos por día consultado, por favor espera...</p>
+              : <p className="text-muted-foreground">Obteniendo órdenes de compra según tus filtros</p>
+          }
         </div>
       )}
 
-      {hasSearched && !isLoading && ordenesCompra.length > 0 && (
+      {hasSearched && ordenesCompra.length > 0 && (
         <>
+          {/* Banner de carga progresiva */}
+          {isLoading && loadingProgress && (
+            <div className="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm">
+              <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
+              <span>Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}... Mostrando {ordenesCompra.length} resultados parciales. Puedes navegar mientras tanto.</span>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-card border border-border rounded-lg p-4">
               <div className="flex items-center gap-3">
@@ -407,6 +516,7 @@ export function OrdenesCompra() {
                     <th className="px-4 py-3 text-left">Producto</th>
                     <th className="px-4 py-3 text-left">Estado</th>
                     <th className="px-4 py-3 text-left">Tipo</th>
+                    <th className="px-4 py-3 text-left">Región</th>
                     <th className="px-4 py-3 text-center">Ver</th>
                   </tr>
                 </thead>
@@ -432,6 +542,9 @@ export function OrdenesCompra() {
                             {orden.tipo || '—'}
                           </span>
                         </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm text-muted-foreground">{orden.region || '—'}</span>
+                        </td>
                         <td className="px-4 py-4 text-center">
                           <a href={orden.urlDetalle} target="_blank" rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
@@ -442,7 +555,7 @@ export function OrdenesCompra() {
                       </tr>
                       {expandedCodigo === orden.codigo && (
                         <tr key={`${orden.codigo}-detail`}>
-                          <td colSpan={6} className="p-0">
+                          <td colSpan={7} className="p-0">
                             <div className="bg-muted/20 border-t border-border p-6">
                               {detailLoading && (
                                 <div className="flex items-center gap-3 text-muted-foreground">

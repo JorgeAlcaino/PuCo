@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Moon, Sun, FileText, ShoppingCart, KeyRound, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Moon, Sun, FileText, ShoppingCart, KeyRound, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useState } from 'react';
 import { useApiKey } from '../context/ApiKeyContext';
@@ -68,6 +68,18 @@ export function Navbar() {
                 <ShoppingCart className="w-4 h-4" />
                 Órdenes de Compra
               </Link>
+
+              <Link
+                to="/como-funciona"
+                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                  isActive('/como-funciona')
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                }`}
+              >
+                <HelpCircle className="w-4 h-4" />
+                ¿Cómo funciona?
+              </Link>
             </div>
           </div>
 
@@ -112,7 +124,7 @@ export function Navbar() {
           <DialogDescription>
             Ingresa tu ticket de acceso a la API de Mercado Público. Se guarda localmente en tu navegador y se envía con cada consulta.{' '}
             <a
-              href="https://www.mercadopublico.cl/Modules/BL/BLPublico/RegistrarUsuario/Register.aspx"
+              href="https://www.chilecompra.cl/api/"
               target="_blank"
               rel="noopener noreferrer"
               className="underline text-primary"

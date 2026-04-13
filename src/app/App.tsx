@@ -3,6 +3,7 @@ import { ThemeProvider } from 'next-themes';
 import { Navbar } from './components/Navbar';
 import { Licitaciones } from './components/Licitaciones';
 import { OrdenesCompra } from './components/OrdenesCompra';
+import { ComoFunciona } from './components/ComoFunciona';
 import { ApiKeyProvider } from './context/ApiKeyContext';
 
 export default function App() {
@@ -17,6 +18,8 @@ export default function App() {
               <Route path="/" element={<Navigate to="/licitaciones" replace />} />
               <Route path="/licitaciones" element={<Licitaciones />} />
               <Route path="/ordenes-compra" element={<OrdenesCompra />} />
+              <Route path="/como-funciona" element={<ComoFunciona />} />
+              <Route path="/establecimientos-salud" element={<Navigate to="/como-funciona" replace />} />
             </Routes>
           </main>
         </div>

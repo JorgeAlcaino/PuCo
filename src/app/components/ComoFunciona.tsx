@@ -79,7 +79,7 @@ export function ComoFunciona() {
         <p className="text-muted-foreground leading-relaxed">
           Esta aplicación te permite consultar en tiempo real las <strong>licitaciones</strong> y <strong>órdenes de compra</strong> publicadas
           en el <a href="https://www.mercadopublico.cl" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-1">Mercado Público de Chile <ExternalLink className="w-3 h-3" /></a>,
-          la plataforma de compras del Estado. Puedes filtrar por estado, tipo, región, fecha y más, así como exportar los resultados a CSV.
+          la plataforma de compras del Estado. Primero haces una búsqueda en la API y después puedes refinar lo ya cargado con un buscador secundario debajo de la lista de resultados. También puedes exportar a CSV lo que estás viendo.
         </p>
       </section>
 
@@ -115,9 +115,9 @@ export function ComoFunciona() {
           <div className="space-y-2">
             <h3 className="font-medium text-sm">Búsqueda</h3>
             <ul className="text-sm text-muted-foreground space-y-1.5 list-disc pl-5">
-              <li>Escribe un <strong>nombre</strong> o <strong>palabra clave</strong> en el buscador para buscar por texto</li>
+              <li>Escribe un <strong>nombre</strong> o <strong>palabra clave</strong> en el buscador principal para consultar la API por texto</li>
               <li>Escribe un <strong>código de licitación</strong> (ej: <code className="bg-muted px-1 rounded">1057403-22-LE24</code>) para ir directo al resultado</li>
-              <li>Si no especificas texto, se listarán todas las licitaciones de la fecha seleccionada</li>
+              <li>Si no escribes texto, se listarán todas las licitaciones del rango de fechas seleccionado</li>
             </ul>
           </div>
           <div className="space-y-2">
@@ -126,13 +126,21 @@ export function ComoFunciona() {
               <li><strong>Estado:</strong> Publicada, Adjudicada, Cerrada, Desierta, etc.</li>
               <li><strong>Tipo:</strong> L1, LE, LP, LQ, LR (públicas), E2, CO, B2, H2, I2 (privadas)</li>
               <li><strong>Región:</strong> filtra por la región de la unidad compradora</li>
-              <li><strong>Desde / Hasta:</strong> selecciona un rango de fechas para buscar en múltiples días a la vez, sin límite fijo. Si solo completas "Desde", se busca ese día.</li>
-              <li><strong>Solo establecimientos de salud:</strong> filtra para mostrar solo compras del sector salud</li>
+              <li><strong>Desde / Hasta:</strong> selecciona un rango de fechas para buscar en múltiples días a la vez. Si solo completas "Desde", se busca ese día.</li>
+              <li><strong>Solo establecimientos de salud:</strong> filtra los resultados para mostrar solo compras del sector salud</li>
             </ul>
           </div>
         </div>
+        <div className="space-y-2">
+          <h3 className="font-medium text-sm">Refinar resultados</h3>
+          <ul className="text-sm text-muted-foreground space-y-1.5 list-disc pl-5">
+            <li>Debajo de la tabla aparece un <strong>buscador secundario</strong> para filtrar solo entre los resultados ya cargados.</li>
+            <li>Ese filtro no vuelve a consultar la API; solo recorta la lista que ya está en pantalla.</li>
+            <li>La paginación, los gráficos y el CSV usan esa lista filtrada.</li>
+          </ul>
+        </div>
         <p className="text-sm text-muted-foreground">
-          Haz clic en cualquier fila para ver el <strong>detalle completo</strong> de la licitación: descripción, montos, fechas, organismo comprador, etc. También puedes <strong>exportar a CSV</strong>.
+          Haz clic en cualquier fila para ver el <strong>detalle completo</strong> de la licitación: descripción, montos, fechas, organismo comprador, etc. El botón <strong>Exportar CSV</strong> descarga lo que estás viendo después de aplicar el filtro secundario.
         </p>
       </section>
 
@@ -149,9 +157,9 @@ export function ComoFunciona() {
           <div className="space-y-2">
             <h3 className="font-medium text-sm">Búsqueda</h3>
             <ul className="text-sm text-muted-foreground space-y-1.5 list-disc pl-5">
-              <li>Escribe un <strong>producto</strong> o <strong>palabra clave</strong> en el buscador</li>
+              <li>Escribe un <strong>producto</strong> o <strong>palabra clave</strong> en el buscador principal para consultar la API</li>
               <li>Escribe un <strong>código de OC</strong> (ej: <code className="bg-muted px-1 rounded">750301-80-SE24</code>) para buscar directamente</li>
-              <li>Sin texto, se listan todas las OC de la fecha seleccionada</li>
+              <li>Sin texto, se listan todas las OC del rango de fechas seleccionado</li>
             </ul>
           </div>
           <div className="space-y-2">
@@ -160,14 +168,22 @@ export function ComoFunciona() {
               <li><strong>Estado:</strong> Enviada al Proveedor, Aceptada, Cancelada, Recepción Conforme, etc.</li>
               <li><strong>Tipo OC:</strong> SE (Sin emisión automática), CM (Convenio Marco), AG (Compra ágil), TD (Trato directo), CC (Compra coordinada)</li>
               <li><strong>Región:</strong> filtra por la región del organismo comprador</li>
-              <li><strong>Desde / Hasta:</strong> rango de fechas sin límite fijo. Sin fecha, se usa el día actual.</li>
-              <li><strong>Solo establecimientos de salud:</strong> igual que en licitaciones</li>
+              <li><strong>Desde / Hasta:</strong> rango de fechas para consultar múltiples días. Sin fecha, se usa el día actual.</li>
+              <li><strong>Solo establecimientos de salud:</strong> filtra las OC cuyo comprador coincide con el directorio de salud</li>
             </ul>
           </div>
         </div>
+        <div className="space-y-2">
+          <h3 className="font-medium text-sm">Refinar resultados</h3>
+          <ul className="text-sm text-muted-foreground space-y-1.5 list-disc pl-5">
+            <li>Después de buscar, aparece un <strong>buscador extra debajo de la tabla</strong> para filtrar la lista ya obtenida.</li>
+            <li>Ese buscador solo trabaja en memoria sobre los resultados visibles.</li>
+            <li>La tabla, la paginación y el CSV respetan ese refinado adicional.</li>
+          </ul>
+        </div>
         <p className="text-sm text-muted-foreground">
           Al expandir una fila verás el detalle: proveedor, montos, tipo de despacho, forma de pago y más.
-          El enlace <strong>"Ver en Mercado Público"</strong> te lleva directamente a la ficha oficial.
+          El enlace <strong>"Ver en Mercado Público"</strong> te lleva directamente a la ficha oficial, y el CSV exporta la lista ya filtrada en pantalla.
         </p>
       </section>
 
@@ -188,7 +204,8 @@ export function ComoFunciona() {
           <div className="text-muted-foreground space-y-1">
             <p>
               La coincidencia se realiza por <strong>palabras clave</strong> del nombre del establecimiento
-              sobre el nombre de la licitación o el producto de la orden de compra (normalizado, sin tildes, sin distinción de mayúsculas).
+              sobre el nombre de la licitación o el producto de la orden de compra. La comparación se normaliza
+              para ignorar tildes y mayúsculas.
             </p>
             <p>
               Fuente: Registro de Establecimientos de Salud del MINSAL. Incluye establecimientos públicos
@@ -196,6 +213,10 @@ export function ComoFunciona() {
             </p>
           </div>
         </div>
+
+        <p className="text-sm text-muted-foreground">
+          En resumen: primero filtras la búsqueda principal en la API, luego puedes usar el buscador secundario para recortar lo ya cargado sin volver a consultar el servidor.
+        </p>
 
         {/* Stats cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

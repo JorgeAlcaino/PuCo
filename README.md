@@ -35,7 +35,7 @@ El frontend usa proxy a http://localhost:5000 para /api.
 
 ## Deploy en Render
 
-Este repo ya incluye [render.yaml](render.yaml) para deploy automatico.
+Este repo ya incluye [render.yaml](render.yaml) para deploy automatico. El despliegue usa un solo web service en Render: Flask sirve la API y también el frontend compilado desde `dist/`, así que en producción no necesitas un servidor aparte para Vite.
 
 ### Opcion recomendada: Blueprint
 
@@ -48,6 +48,7 @@ Este repo ya incluye [render.yaml](render.yaml) para deploy automatico.
 
 - MERCADO_PUBLICO_TICKET (opcional, recomendado en produccion)
   - Si esta definida, el backend la usa automaticamente cuando no llega header X-MP-Ticket desde el navegador.
+  - En Render conviene crearla como Secret/Environment Variable para que la web funcione sin depender del ticket guardado en el navegador del usuario.
 - PYTHON_VERSION (ya definida en render.yaml)
 - NODE_VERSION (ya definida en render.yaml)
 
@@ -60,10 +61,20 @@ Este repo ya incluye [render.yaml](render.yaml) para deploy automatico.
   - compila frontend en dist/
 - Start:
   - gunicorn app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 1 --threads 4
+- Routing:
+  - `/api/*` queda atendido por Flask
+  - cualquier ruta del frontend se resuelve con `dist/index.html`, permitiendo navegar en modo SPA
 
 ### Health check
 
 - Endpoint: /health
+
+### Checklist rapido
+
+1. Crear el Blueprint en Render desde este repositorio.
+2. Añadir `MERCADO_PUBLICO_TICKET` como variable secreta si quieres que la web quede lista para usar.
+3. Verificar que el deploy termine y que `/health` responda `200`.
+4. Abrir la URL pública y probar una búsqueda en Licitaciones u Órdenes de Compra.
 
 ## Notas operativas
 

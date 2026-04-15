@@ -518,6 +518,14 @@ def _iso_to_mp_date(iso_date: str) -> str:
     return iso_date
 
 
+def _get_mp_ticket() -> str:
+    """Read MP ticket from request header first, then fallback to server env var."""
+    header_ticket = request.headers.get("X-MP-Ticket", "").strip()
+    if header_ticket:
+        return header_ticket
+    return os.environ.get("MERCADO_PUBLICO_TICKET", "").strip()
+
+
 def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
     """Return a list of ddmmyyyy strings for each day in [inicio, fin]."""
     if not fecha_inicio_iso or not fecha_fin_iso:
@@ -611,7 +619,7 @@ def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_ran
 
 @app.route("/api/licitaciones")
 def get_licitaciones():
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = _get_mp_ticket()
     if not ticket:
         return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
@@ -756,7 +764,7 @@ def _run_oc_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_rang
 
 @app.route("/api/ordenes-compra")
 def get_ordenes_compra():
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = _get_mp_ticket()
     if not ticket:
         return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
@@ -823,7 +831,7 @@ def get_ordenes_compra():
 @app.route("/api/licitacion/<codigo>")
 def get_licitacion_detail(codigo):
     """Fetch full details for a single licitacion by its code."""
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = _get_mp_ticket()
     if not ticket:
         return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("lic_detail", {"codigo": codigo})
@@ -847,7 +855,7 @@ def get_licitacion_detail(codigo):
 @app.route("/api/orden-compra/<path:codigo>")
 def get_orden_compra_detail(codigo):
     """Fetch full details for a single OC by its code."""
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = _get_mp_ticket()
     if not ticket:
         return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("oc_detail", {"codigo": codigo})

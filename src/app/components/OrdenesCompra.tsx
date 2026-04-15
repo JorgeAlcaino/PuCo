@@ -1,6 +1,5 @@
 ﻿import { useState, useMemo, useCallback, Fragment } from 'react';
 import { useApiKey } from '../context/ApiKeyContext';
-import { matchesEstablecimiento } from '../data/establecimientos';
 import { Search, Filter, TrendingUp, Calendar, DollarSign, Package, ChevronDown, ChevronUp, CheckCircle2, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, Truck, CreditCard, Hash, Clock, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -8,46 +7,17 @@ const ESTADO_COLORS: Record<string, string> = {
   'Enviada al Proveedor': '#3b82f6',
   'Aceptada': '#10b981',
   'Cancelada': '#ef4444',
-  'Anulada': '#dc2626',
   'Recepción Conforme': '#8b5cf6',
   'Recepción Incompleta': '#f97316',
   'Pendiente': '#f59e0b',
   'Parcialmente Recepcionada': '#6366f1',
-  'En Proceso': '#06b6d4',
-  'Recibida': '#84cc16',
 };
 
 const TIPOS_OC = [
   { value: '', label: 'Todos los tipos' },
   { value: 'SE', label: 'SE — Sin emisión automática' },
   { value: 'CM', label: 'CM — Convenio Marco' },
-  { value: 'AG', label: 'AG — Compra ágil' },
-  { value: 'TD', label: 'TD — Trato directo' },
-  { value: 'CC', label: 'CC — Compra coordinada' },
 ];
-
-const REGIONES = [
-  { value: '', label: 'Todas las regiones' },
-  { value: 'Arica y Parinacota', label: 'Arica y Parinacota' },
-  { value: 'Tarapacá', label: 'Tarapacá' },
-  { value: 'Antofagasta', label: 'Antofagasta' },
-  { value: 'Atacama', label: 'Atacama' },
-  { value: 'Coquimbo', label: 'Coquimbo' },
-  { value: 'Valparaíso', label: 'Valparaíso' },
-  { value: 'Metropolitana', label: 'Metropolitana' },
-  { value: "O'Higgins", label: "O'Higgins" },
-  { value: 'Maule', label: 'Maule' },
-  { value: 'Ñuble', label: 'Ñuble' },
-  { value: 'Biobío', label: 'Biobío' },
-  { value: 'Araucanía', label: 'La Araucanía' },
-  { value: 'Los Ríos', label: 'Los Ríos' },
-  { value: 'Los Lagos', label: 'Los Lagos' },
-  { value: 'Aysén', label: 'Aysén' },
-  { value: 'Magallanes', label: 'Magallanes' },
-];
-
-const normalizeSearchText = (value: string) =>
-  value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 interface OrdenCompra {
   codigo: string;
@@ -90,10 +60,7 @@ async function fetchOrdenesCompra(filtros: {
   sortField: string;
   sortOrder: string;
   fechaInicio: string;
-  fechaFin: string;
-}, apiKey: string, signal?: AbortSignal, onPending?: () => void,
-  onPartial?: (data: { total: number; listado: OrdenCompra[]; progress: number; totalDays: number }) => void
-): Promise<{ total: number; listado: OrdenCompra[] }> {
+}, apiKey: string, signal?: AbortSignal): Promise<{ total: number; listado: OrdenCompra[] }> {
   const params = new URLSearchParams();
   if (filtros.busqueda) params.set('busqueda', filtros.busqueda);
   if (filtros.codigo) params.set('codigo', filtros.codigo);
@@ -101,7 +68,6 @@ async function fetchOrdenesCompra(filtros: {
   if (filtros.region && filtros.region !== 'Todas') params.set('region', filtros.region);
   if (filtros.tipo) params.set('tipo', filtros.tipo);
   if (filtros.fechaInicio) params.set('fechaInicio', filtros.fechaInicio);
-  if (filtros.fechaFin) params.set('fechaFin', filtros.fechaFin);
   params.set('sortField', filtros.sortField);
   params.set('sortOrder', filtros.sortOrder);
 
@@ -109,40 +75,14 @@ async function fetchOrdenesCompra(filtros: {
   if (apiKey) headers['X-MP-Ticket'] = apiKey;
 
   const resp = await fetch(`/api/ordenes-compra?${params.toString()}`, { signal, headers });
-
-  if (resp.status === 202) {
-    const pendingData = await resp.json();
-    const jobId = pendingData?.jobId as string | undefined;
-    if (!jobId) {
-      throw new Error('No se recibió un identificador de job válido. Intenta nuevamente.');
-    }
-    onPending?.();
-    while (true) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      await new Promise(r => setTimeout(r, 3000));
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const poll = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal, headers });
-      const pollData = await poll.json().catch(() => ({} as { error?: string; status?: string; partial?: { total: number; listado: OrdenCompra[]; progress: number; totalDays: number }; data?: { total: number; listado: OrdenCompra[] } }));
-      if (!poll.ok) {
-        if (poll.status === 404) {
-          throw new Error('La búsqueda expiró o el servidor se reinició. Vuelve a ejecutar la búsqueda.');
-        }
-        throw new Error((pollData as { error?: string }).error || `Error HTTP ${poll.status} al consultar el estado de la búsqueda`);
-      }
-      if (pollData.status === 'done') return pollData.data;
-      if (pollData.status === 'error') throw new Error(pollData.error || 'Error del servidor');
-      if (pollData.partial) onPartial?.(pollData.partial);
-    }
-  }
-
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `Error HTTP ${resp.status}`);
   return data;
 }
 
 function exportCSV(ordenes: OrdenCompra[]) {
-  const headers = ['Código', 'Producto', 'Estado', 'Tipo', 'Región'];
-  const rows = ordenes.map(o => [o.codigo, o.producto, o.estado, o.tipo, o.region ?? '']);
+  const headers = ['Código', 'Producto', 'Estado', 'Tipo'];
+  const rows = ordenes.map(o => [o.codigo, o.producto, o.estado, o.tipo]);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -175,25 +115,20 @@ async function fetchOCDetail(codigo: string, apiKey: string, retries = 2): Promi
 export function OrdenesCompra() {
   const { apiKey } = useApiKey();
   const [busqueda, setBusqueda] = useState('');
+  const [codigoFilter, setCodigoFilter] = useState('');
   const [estadoFilter, setEstadoFilter] = useState('Todos');
   const [tipoFilter, setTipoFilter] = useState('');
-  const [regionFilter, setRegionFilter] = useState('');
   const [sortField, setSortField] = useState<'codigo' | 'producto'>('codigo');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [showFilters, setShowFilters] = useState(true);
   const [fechaInicio, setFechaInicio] = useState('');
-  const [fechaFin, setFechaFin] = useState('');
-  const [soloEstablecimientos, setSoloEstablecimientos] = useState(false);
-  const [filtroResultados, setFiltroResultados] = useState('');
 
   const [ordenesCompra, setOrdenesCompra] = useState<OrdenCompra[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSlow, setIsSlow] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [loadingProgress, setLoadingProgress] = useState<{ progress: number; totalDays: number } | null>(null);
 
   // Detail panel
   const [expandedCodigo, setExpandedCodigo] = useState<string | null>(null);
@@ -206,42 +141,33 @@ export function OrdenesCompra() {
   const abortRef = useState<AbortController | null>(null);
 
   const handleBuscar = async () => {
+    if (!apiKey) {
+      setError('Debes configurar tu API key de Mercado Público antes de buscar.');
+      return;
+    }
     abortRef[0]?.abort();
     const controller = new AbortController();
     abortRef[1](controller);
 
     setIsLoading(true);
-    setIsSlow(false);
     setHasSearched(true);
     setError('');
     setCurrentPage(1);
-    setFiltroResultados('');
     setExpandedCodigo(null);
     setDetailData(null);
-    setLoadingProgress(null);
     try {
-      const isCodigo = /^\d+-\d+-[A-Za-z]{2}\d+$/.test(busqueda.trim());
-      const filterEstab = (list: OrdenCompra[]) =>
-        soloEstablecimientos
-          ? list.filter(o => matchesEstablecimiento(o.producto) || (o.organismo ? matchesEstablecimiento(o.organismo) : false))
-          : list;
       const result = await fetchOrdenesCompra({
-        busqueda: isCodigo ? '' : busqueda, codigo: isCodigo ? busqueda.trim() : '',
-        estado: estadoFilter, region: regionFilter, tipo: tipoFilter,
-        sortField, sortOrder, fechaInicio, fechaFin,
-      }, apiKey, controller.signal, () => setIsSlow(true), (partial) => {
-        setLoadingProgress({ progress: partial.progress, totalDays: partial.totalDays });
-        setOrdenesCompra(filterEstab(partial.listado));
-      });
-      setOrdenesCompra(filterEstab(result.listado));
+        busqueda, codigo: codigoFilter, estado: estadoFilter,
+        region: 'Todas', tipo: tipoFilter, sortField, sortOrder,
+        fechaInicio,
+      }, apiKey, controller.signal);
+      setOrdenesCompra(result.listado);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Error desconocido');
       setOrdenesCompra([]);
     } finally {
       setIsLoading(false);
-      setIsSlow(false);
-      setLoadingProgress(null);
     }
   };
 
@@ -266,43 +192,27 @@ export function OrdenesCompra() {
     }
   }, [expandedCodigo, apiKey]);
 
-  const ordenesFiltradas = useMemo(() => {
-    const q = normalizeSearchText(filtroResultados.trim());
-    if (!q) return ordenesCompra;
-
-    return ordenesCompra.filter(orden =>
-      normalizeSearchText([
-        orden.producto,
-        orden.codigo,
-        orden.proveedor,
-        orden.organismo,
-        orden.region,
-        orden.tipo,
-      ].filter(Boolean).join(' ')).includes(q)
-    );
-  }, [ordenesCompra, filtroResultados]);
-
   const estadoStats = useMemo(() => {
     const stats: Record<string, number> = {};
-    ordenesFiltradas.forEach(o => { stats[o.estado] = (stats[o.estado] || 0) + 1; });
+    ordenesCompra.forEach(o => { stats[o.estado] = (stats[o.estado] || 0) + 1; });
     return Object.entries(stats).map(([name, value]) => ({ name, value }));
-  }, [ordenesFiltradas]);
+  }, [ordenesCompra]);
 
   const tipoStats = useMemo(() => {
     const stats: Record<string, number> = {};
-    ordenesFiltradas.forEach(o => {
+    ordenesCompra.forEach(o => {
       const t = o.tipo || 'N/D';
       stats[t] = (stats[t] || 0) + 1;
     });
     return Object.entries(stats)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count);
-  }, [ordenesFiltradas]);
+  }, [ordenesCompra]);
 
-  const totalPages = Math.max(1, Math.ceil(ordenesFiltradas.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(ordenesCompra.length / pageSize));
   const paginated = useMemo(
-    () => ordenesFiltradas.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [ordenesFiltradas, currentPage, pageSize]
+    () => ordenesCompra.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [ordenesCompra, currentPage, pageSize]
   );
 
   const formatCurrency = (v: number) =>
@@ -317,9 +227,6 @@ export function OrdenesCompra() {
   const TIPO_OC_COLORS: Record<string, string> = {
     'SE': '#3b82f6',
     'CM': '#10b981',
-    'AG': '#f59e0b',
-    'TD': '#8b5cf6',
-    'CC': '#ef4444',
   };
 
   return (
@@ -329,8 +236,8 @@ export function OrdenesCompra() {
           <h1>Órdenes de Compra</h1>
           <p className="text-muted-foreground mt-1">Consulta órdenes de compra del Mercado Público en tiempo real</p>
         </div>
-        {ordenesFiltradas.length > 0 && (
-          <button onClick={() => exportCSV(ordenesFiltradas)}
+        {ordenesCompra.length > 0 && (
+          <button onClick={() => exportCSV(ordenesCompra)}
             className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors">
             <Download className="w-4 h-4" />Exportar CSV
           </button>
@@ -359,7 +266,14 @@ export function OrdenesCompra() {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-border">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-border">
+              <div>
+                <label className="block text-sm mb-2">Código OC</label>
+                <input type="text" placeholder="Ej: 750301-80-SE24"
+                  value={codigoFilter} onChange={(e) => setCodigoFilter(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleBuscar()}
+                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
+              </div>
               <div>
                 <label className="block text-sm mb-2">Estado</label>
                 <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value)}
@@ -375,21 +289,8 @@ export function OrdenesCompra() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm mb-2">Región</label>
-                <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  {REGIONES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Desde</label>
+                <label className="block text-sm mb-2">Fecha consulta</label>
                 <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Hasta</label>
-                <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
-                  min={fechaInicio || undefined}
                   className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
@@ -407,31 +308,6 @@ export function OrdenesCompra() {
                   <option value="desc">Descendente</option>
                   <option value="asc">Ascendente</option>
                 </select>
-              </div>
-              <div className="flex items-center md:col-span-3">
-                <label className="flex items-center gap-3 cursor-pointer select-none group">
-                  <div className="relative">
-                    <input
-                      type="checkbox"
-                      checked={soloEstablecimientos}
-                      onChange={(e) => setSoloEstablecimientos(e.target.checked)}
-                      className="sr-only"
-                    />
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${soloEstablecimientos ? 'bg-primary border-primary' : 'border-border bg-input-background group-hover:border-primary/60'}`}>
-                      {soloEstablecimientos && (
-                        <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-sm font-medium">
-                    Solo establecimientos de salud
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    — filtra resultados por el directorio de establecimientos de salud públicos
-                  </span>
-                </label>
               </div>
             </div>
           )}
@@ -452,28 +328,16 @@ export function OrdenesCompra() {
         </div>
       )}
 
-      {isLoading && ordenesCompra.length === 0 && (
+      {isLoading && (
         <div className="text-center py-16">
           <Loader2 className="w-16 h-16 mx-auto mb-4 text-primary animate-spin" />
           <h3 className="mb-2">Consultando API del Mercado Público...</h3>
-          {loadingProgress
-            ? <p className="text-muted-foreground">Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}...</p>
-            : isSlow
-              ? <p className="text-muted-foreground">La consulta puede tardar varios minutos por día si la API está inestable, por favor espera...</p>
-              : <p className="text-muted-foreground">Obteniendo órdenes de compra según tus filtros</p>
-          }
+          <p className="text-muted-foreground">Obteniendo órdenes de compra según tus filtros</p>
         </div>
       )}
 
-      {hasSearched && ordenesFiltradas.length > 0 && (
+      {hasSearched && !isLoading && ordenesCompra.length > 0 && (
         <>
-          {/* Banner de carga progresiva */}
-          {isLoading && loadingProgress && (
-            <div className="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm">
-              <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
-              <span>Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}... Mostrando {ordenesCompra.length} resultados parciales. Puedes navegar mientras tanto.</span>
-            </div>
-          )}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-card border border-border rounded-lg p-4">
               <div className="flex items-center gap-3">
@@ -543,7 +407,6 @@ export function OrdenesCompra() {
                     <th className="px-4 py-3 text-left">Producto</th>
                     <th className="px-4 py-3 text-left">Estado</th>
                     <th className="px-4 py-3 text-left">Tipo</th>
-                    <th className="px-4 py-3 text-left">Región</th>
                     <th className="px-4 py-3 text-center">Ver</th>
                   </tr>
                 </thead>
@@ -569,9 +432,6 @@ export function OrdenesCompra() {
                             {orden.tipo || '—'}
                           </span>
                         </td>
-                        <td className="px-4 py-4">
-                          <span className="text-sm text-muted-foreground">{orden.region || '—'}</span>
-                        </td>
                         <td className="px-4 py-4 text-center">
                           <a href={orden.urlDetalle} target="_blank" rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
@@ -582,7 +442,7 @@ export function OrdenesCompra() {
                       </tr>
                       {expandedCodigo === orden.codigo && (
                         <tr key={`${orden.codigo}-detail`}>
-                          <td colSpan={7} className="p-0">
+                          <td colSpan={6} className="p-0">
                             <div className="bg-muted/20 border-t border-border p-6">
                               {detailLoading && (
                                 <div className="flex items-center gap-3 text-muted-foreground">
@@ -687,7 +547,7 @@ export function OrdenesCompra() {
               >
                 {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
-              <span>por página · {ordenesFiltradas.length} resultados</span>
+              <span>por página · {ordenesCompra.length} en total</span>
             </div>
             <div className="flex items-center gap-1">
               <button
@@ -733,48 +593,7 @@ export function OrdenesCompra() {
               >»</button>
             </div>
           </div>
-
-          <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              Filtrar resultados cargados
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-              <input
-                type="text"
-                value={filtroResultados}
-                onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
-                placeholder="Buscar dentro de los resultados ya obtenidos..."
-                className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">Este filtro solo actúa sobre la lista ya cargada.</p>
-          </div>
         </>
-      )}
-
-      {hasSearched && !isLoading && !error && ordenesCompra.length > 0 && ordenesFiltradas.length === 0 && (
-        <div className="text-center py-16 bg-card border border-border rounded-lg space-y-4">
-          <Package className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-          <div>
-            <h3 className="mb-2">No hay coincidencias con el filtro adicional</h3>
-            <p className="text-muted-foreground">Prueba limpiando el buscador de resultados para ver la lista completa ya cargada.</p>
-          </div>
-          <div className="bg-muted/40 border border-border rounded-lg p-4 text-left space-y-2">
-            <label className="block text-sm font-medium">Filtrar resultados cargados</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-              <input
-                type="text"
-                value={filtroResultados}
-                onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
-                placeholder="Buscar dentro de los resultados ya obtenidos..."
-                className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-          </div>
-        </div>
       )}
 
       {hasSearched && !isLoading && !error && ordenesCompra.length === 0 && (

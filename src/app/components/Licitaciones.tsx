@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, Fragment } from 'react';
 import { useApiKey } from '../context/ApiKeyContext';
-import { matchesEstablecimiento } from '../data/establecimientos';
 import { Search, Filter, TrendingUp, Calendar, ChevronDown, ChevronUp, FileText, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, DollarSign, Info, Hash, Clock, Users, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -28,29 +27,6 @@ const TIPOS_LICITACION = [
   { value: 'H2', label: 'H2 — Privada 2.000–5.000 UTM' },
   { value: 'I2', label: 'I2 — Privada > 5.000 UTM' },
 ];
-
-const REGIONES = [
-  { value: '', label: 'Todas las regiones' },
-  { value: 'Arica y Parinacota', label: 'Arica y Parinacota' },
-  { value: 'Tarapacá', label: 'Tarapacá' },
-  { value: 'Antofagasta', label: 'Antofagasta' },
-  { value: 'Atacama', label: 'Atacama' },
-  { value: 'Coquimbo', label: 'Coquimbo' },
-  { value: 'Valparaíso', label: 'Valparaíso' },
-  { value: 'Metropolitana', label: 'Metropolitana' },
-  { value: "O'Higgins", label: "O'Higgins" },
-  { value: 'Maule', label: 'Maule' },
-  { value: 'Ñuble', label: 'Ñuble' },
-  { value: 'Biobío', label: 'Biobío' },
-  { value: 'Araucanía', label: 'La Araucanía' },
-  { value: 'Los Ríos', label: 'Los Ríos' },
-  { value: 'Los Lagos', label: 'Los Lagos' },
-  { value: 'Aysén', label: 'Aysén' },
-  { value: 'Magallanes', label: 'Magallanes' },
-];
-
-const normalizeSearchText = (value: string) =>
-  value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 interface Licitacion {
   codigo: string;
@@ -86,23 +62,19 @@ async function fetchLicitaciones(filtros: {
   busqueda: string;
   codigo: string;
   estado: string;
-  tipo: string;
   region: string;
+  tipo: string;
   sortField: string;
   sortOrder: string;
   fechaInicio: string;
-  fechaFin: string;
-}, apiKey: string, signal?: AbortSignal, onPending?: () => void,
-  onPartial?: (data: { total: number; listado: Licitacion[]; progress: number; totalDays: number }) => void
-): Promise<{ total: number; listado: Licitacion[] }> {
+}, apiKey: string, signal?: AbortSignal, onPending?: () => void): Promise<{ total: number; listado: Licitacion[] }> {
   const params = new URLSearchParams();
   if (filtros.busqueda) params.set('busqueda', filtros.busqueda);
   if (filtros.codigo) params.set('codigo', filtros.codigo);
   if (filtros.estado && filtros.estado !== 'Todos') params.set('estado', filtros.estado);
+  if (filtros.region && filtros.region !== 'Todas') params.set('region', filtros.region);
   if (filtros.tipo) params.set('tipo', filtros.tipo);
-  if (filtros.region) params.set('region', filtros.region);
   if (filtros.fechaInicio) params.set('fechaInicio', filtros.fechaInicio);
-  if (filtros.fechaFin) params.set('fechaFin', filtros.fechaFin);
   params.set('sortField', filtros.sortField);
   params.set('sortOrder', filtros.sortOrder);
 
@@ -113,27 +85,16 @@ async function fetchLicitaciones(filtros: {
   const resp = await fetch(url, { signal, headers });
 
   if (resp.status === 202) {
-    const pendingData = await resp.json();
-    const jobId = pendingData?.jobId as string | undefined;
-    if (!jobId) {
-      throw new Error('No se recibió un identificador de job válido. Intenta nuevamente.');
-    }
+    const { jobId } = await resp.json();
     onPending?.();
     while (true) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       await new Promise(r => setTimeout(r, 3000));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const poll = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal, headers });
-      const pollData = await poll.json().catch(() => ({} as { error?: string; status?: string; partial?: { total: number; listado: Licitacion[]; progress: number; totalDays: number }; data?: { total: number; listado: Licitacion[] } }));
-      if (!poll.ok) {
-        if (poll.status === 404) {
-          throw new Error('La búsqueda expiró o el servidor se reinició. Vuelve a ejecutar la búsqueda.');
-        }
-        throw new Error((pollData as { error?: string }).error || `Error HTTP ${poll.status} al consultar el estado de la búsqueda`);
-      }
+      const pollData = await poll.json();
       if (pollData.status === 'done') return pollData.data;
       if (pollData.status === 'error') throw new Error(pollData.error || 'Error del servidor');
-      if (pollData.partial) onPartial?.(pollData.partial);
     }
   }
 
@@ -143,11 +104,10 @@ async function fetchLicitaciones(filtros: {
 }
 
 function exportCSV(licitaciones: Licitacion[]) {
-  const headers = ['Código', 'Nombre', 'Estado', 'Tipo', 'Tipo Descripción', 'Región', 'Fecha Cierre'];
+  const headers = ['Código', 'Nombre', 'Estado', 'Tipo', 'Tipo Descripción', 'Fecha Cierre'];
   const rows = licitaciones.map(l => [
     l.codigo, l.nombre, l.estado, l.tipo,
     TIPOS_LICITACION.find(t => t.value === l.tipo)?.label ?? l.tipo,
-    l.region ?? '',
     l.fechaCierre,
   ]);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -182,16 +142,14 @@ async function fetchLicitacionDetail(codigo: string, apiKey: string, retries = 2
 export function Licitaciones() {
   const { apiKey } = useApiKey();
   const [busqueda, setBusqueda] = useState('');
+  const [codigoFilter, setCodigoFilter] = useState('');
   const [estadoFilter, setEstadoFilter] = useState('Todos');
+  const [regionFilter, setRegionFilter] = useState('Todas');
   const [tipoFilter, setTipoFilter] = useState('');
-  const [regionFilter, setRegionFilter] = useState('');
   const [sortField, setSortField] = useState<'fechaCierre' | 'fechaPublicacion'>('fechaCierre');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [showFilters, setShowFilters] = useState(true);
   const [fechaInicio, setFechaInicio] = useState('');
-  const [fechaFin, setFechaFin] = useState('');
-  const [soloEstablecimientos, setSoloEstablecimientos] = useState(false);
-  const [filtroResultados, setFiltroResultados] = useState('');
 
   const [licitaciones, setLicitaciones] = useState<Licitacion[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -200,7 +158,6 @@ export function Licitaciones() {
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [loadingProgress, setLoadingProgress] = useState<{ progress: number; totalDays: number } | null>(null);
 
   // Detail panel
   const [expandedCodigo, setExpandedCodigo] = useState<string | null>(null);
@@ -209,11 +166,20 @@ export function Licitaciones() {
   const [detailError, setDetailError] = useState('');
 
   const estados = ['Todos', 'Publicada', 'Adjudicada', 'Cerrada', 'Desierta', 'Revocada', 'Suspendida'];
+  const regiones = [
+    'Todas', 'Arica y Parinacota', 'Tarapacá', 'Antofagasta', 'Atacama', 'Coquimbo',
+    'Valparaíso', 'Metropolitana', "O'Higgins", 'Maule', 'Ñuble', 'Biobío',
+    'La Araucanía', 'Los Ríos', 'Los Lagos', 'Aysén', 'Magallanes'
+  ];
 
   // Abort previous search when a new one starts
   const abortRef = useState<AbortController | null>(null);
 
   const handleBuscar = async () => {
+    if (!apiKey) {
+      setError('Debes configurar tu API key de Mercado Público antes de buscar.');
+      return;
+    }
     abortRef[0]?.abort();
     const controller = new AbortController();
     abortRef[1](controller);
@@ -223,25 +189,15 @@ export function Licitaciones() {
     setHasSearched(true);
     setError('');
     setCurrentPage(1);
-    setFiltroResultados('');
     setExpandedCodigo(null);
     setDetailData(null);
-    setLoadingProgress(null);
     try {
-      const isCodigo = /^\d+-\d+-[A-Za-z]{2}\d+$/.test(busqueda.trim());
-      const filterEstab = (list: Licitacion[]) =>
-        soloEstablecimientos
-          ? list.filter(l => matchesEstablecimiento(l.nombre) || (l.organismo ? matchesEstablecimiento(l.organismo) : false))
-          : list;
       const result = await fetchLicitaciones({
-        busqueda: isCodigo ? '' : busqueda, codigo: isCodigo ? busqueda.trim() : '',
-        estado: estadoFilter, tipo: tipoFilter, region: regionFilter,
-        sortField, sortOrder, fechaInicio, fechaFin,
-      }, apiKey, controller.signal, () => setIsSlow(true), (partial) => {
-        setLoadingProgress({ progress: partial.progress, totalDays: partial.totalDays });
-        setLicitaciones(filterEstab(partial.listado));
-      });
-      setLicitaciones(filterEstab(result.listado));
+        busqueda, codigo: codigoFilter, estado: estadoFilter,
+        region: regionFilter, tipo: tipoFilter, sortField, sortOrder,
+        fechaInicio,
+      }, apiKey, controller.signal, () => setIsSlow(true));
+      setLicitaciones(result.listado);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Error desconocido');
@@ -249,7 +205,6 @@ export function Licitaciones() {
     } finally {
       setIsLoading(false);
       setIsSlow(false);
-      setLoadingProgress(null);
     }
   };
 
@@ -274,42 +229,27 @@ export function Licitaciones() {
     }
   }, [expandedCodigo, apiKey]);
 
-  const licitacionesFiltradas = useMemo(() => {
-    const q = normalizeSearchText(filtroResultados.trim());
-    if (!q) return licitaciones;
-
-    return licitaciones.filter(lic =>
-      normalizeSearchText([
-        lic.nombre,
-        lic.codigo,
-        lic.organismo,
-        lic.region,
-        lic.tipo,
-      ].filter(Boolean).join(' ')).includes(q)
-    );
-  }, [licitaciones, filtroResultados]);
-
   const estadoStats = useMemo(() => {
     const stats: Record<string, number> = {};
-    licitacionesFiltradas.forEach(l => { stats[l.estado] = (stats[l.estado] || 0) + 1; });
+    licitaciones.forEach(l => { stats[l.estado] = (stats[l.estado] || 0) + 1; });
     return Object.entries(stats).map(([name, value]) => ({ name, value }));
-  }, [licitacionesFiltradas]);
+  }, [licitaciones]);
 
   const tipoStats = useMemo(() => {
     const stats: Record<string, number> = {};
-    licitacionesFiltradas.forEach(l => {
+    licitaciones.forEach(l => {
       const t = l.tipo || 'N/D';
       stats[t] = (stats[t] || 0) + 1;
     });
     return Object.entries(stats)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count);
-  }, [licitacionesFiltradas]);
+  }, [licitaciones]);
 
-  const totalPages = Math.max(1, Math.ceil(licitacionesFiltradas.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(licitaciones.length / pageSize));
   const paginated = useMemo(
-    () => licitacionesFiltradas.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [licitacionesFiltradas, currentPage, pageSize]
+    () => licitaciones.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [licitaciones, currentPage, pageSize]
   );
 
   const formatCurrency = (v: number) =>
@@ -337,9 +277,9 @@ export function Licitaciones() {
             Consulta licitaciones del Mercado Público en tiempo real
           </p>
         </div>
-        {licitacionesFiltradas.length > 0 && (
+        {licitaciones.length > 0 && (
           <button
-            onClick={() => exportCSV(licitacionesFiltradas)}
+            onClick={() => exportCSV(licitaciones)}
             className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
           >
             <Download className="w-4 h-4" />
@@ -356,7 +296,7 @@ export function Licitaciones() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Buscar por nombre o código..."
+                placeholder="Buscar por nombre, código u organismo..."
                 value={busqueda}
                 onChange={(e) => setBusqueda(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleBuscar()}
@@ -381,7 +321,14 @@ export function Licitaciones() {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-border">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-border">
+              <div>
+                <label className="block text-sm mb-2">Código Licitación</label>
+                <input type="text" placeholder="Ej: 1057403-22-LE24"
+                  value={codigoFilter} onChange={(e) => setCodigoFilter(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleBuscar()}
+                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
+              </div>
               <div>
                 <label className="block text-sm mb-2">Estado</label>
                 <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value)}
@@ -400,18 +347,12 @@ export function Licitaciones() {
                 <label className="block text-sm mb-2">Región</label>
                 <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)}
                   className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  {REGIONES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  {regiones.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-sm mb-2">Desde</label>
+                <label className="block text-sm mb-2">Fecha consulta</label>
                 <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Hasta</label>
-                <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
-                  min={fechaInicio || undefined}
                   className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
@@ -429,31 +370,6 @@ export function Licitaciones() {
                   <option value="desc">Descendente</option>
                   <option value="asc">Ascendente</option>
                 </select>
-              </div>
-              <div className="flex items-center md:col-span-3">
-                <label className="flex items-center gap-3 cursor-pointer select-none group">
-                  <div className="relative">
-                    <input
-                      type="checkbox"
-                      checked={soloEstablecimientos}
-                      onChange={(e) => setSoloEstablecimientos(e.target.checked)}
-                      className="sr-only"
-                    />
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${soloEstablecimientos ? 'bg-primary border-primary' : 'border-border bg-input-background group-hover:border-primary/60'}`}>
-                      {soloEstablecimientos && (
-                        <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-sm font-medium">
-                    Solo establecimientos de salud
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    — filtra resultados por el directorio de establecimientos de salud públicos
-                  </span>
-                </label>
               </div>
             </div>
           )}
@@ -480,29 +396,20 @@ export function Licitaciones() {
       )}
 
       {/* Cargando */}
-      {isLoading && licitaciones.length === 0 && (
+      {isLoading && (
         <div className="text-center py-16">
           <Loader2 className="w-16 h-16 mx-auto mb-4 text-primary animate-spin" />
           <h3 className="mb-2">Consultando API del Mercado Público...</h3>
-          {loadingProgress
-            ? <p className="text-muted-foreground">Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}...</p>
-            : isSlow
-              ? <p className="text-muted-foreground">La consulta puede tardar varios minutos si la API está inestable, por favor espera...</p>
-              : <p className="text-muted-foreground">Obteniendo licitaciones según tus filtros</p>
+          {isSlow
+            ? <p className="text-muted-foreground">La consulta puede tardar hasta 60 segundos, por favor espera...</p>
+            : <p className="text-muted-foreground">Obteniendo licitaciones según tus filtros</p>
           }
         </div>
       )}
 
       {/* Resultados */}
-      {hasSearched && licitacionesFiltradas.length > 0 && (
+      {hasSearched && !isLoading && licitaciones.length > 0 && (
         <>
-          {/* Banner de carga progresiva */}
-          {isLoading && loadingProgress && (
-            <div className="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm">
-              <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
-              <span>Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}... Mostrando {licitaciones.length} resultados parciales. Puedes navegar mientras tanto.</span>
-            </div>
-          )}
           {/* Estadísticas */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-card border border-border rounded-lg p-4">
@@ -573,7 +480,6 @@ export function Licitaciones() {
                     <th className="px-4 py-3 text-left">Nombre</th>
                     <th className="px-4 py-3 text-left">Estado</th>
                     <th className="px-4 py-3 text-left">Tipo</th>
-                    <th className="px-4 py-3 text-left">Región</th>
                     <th className="px-4 py-3 text-left">Cierre</th>
                     <th className="px-4 py-3 text-center">Ver</th>
                   </tr>
@@ -601,9 +507,6 @@ export function Licitaciones() {
                           </span>
                         </td>
                         <td className="px-4 py-4">
-                          <span className="text-sm text-muted-foreground">{lic.region || '—'}</span>
-                        </td>
-                        <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <Calendar className="w-4 h-4 text-muted-foreground" />
                             <span className="text-sm">{formatDate(lic.fechaCierre)}</span>
@@ -619,7 +522,7 @@ export function Licitaciones() {
                       </tr>
                       {expandedCodigo === lic.codigo && (
                         <tr key={`${lic.codigo}-detail`}>
-                          <td colSpan={8} className="p-0">
+                          <td colSpan={7} className="p-0">
                             <div className="bg-muted/20 border-t border-border p-6">
                               {detailLoading && (
                                 <div className="flex items-center gap-3 text-muted-foreground">
@@ -718,7 +621,7 @@ export function Licitaciones() {
               >
                 {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
-              <span>por página · {licitacionesFiltradas.length} resultados</span>
+              <span>por página · {licitaciones.length} en total</span>
             </div>
             <div className="flex items-center gap-1">
               <button
@@ -764,51 +667,10 @@ export function Licitaciones() {
               >»</button>
             </div>
           </div>
-
-          <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              Filtrar resultados cargados
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-              <input
-                type="text"
-                value={filtroResultados}
-                onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
-                placeholder="Buscar dentro de los resultados ya obtenidos..."
-                className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">Este filtro solo actúa sobre la lista ya cargada.</p>
-          </div>
         </>
       )}
 
       {/* Sin resultados */}
-      {hasSearched && !isLoading && !error && licitaciones.length > 0 && licitacionesFiltradas.length === 0 && (
-        <div className="text-center py-16 bg-card border border-border rounded-lg space-y-4">
-          <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-          <div>
-            <h3 className="mb-2">No hay coincidencias con el filtro adicional</h3>
-            <p className="text-muted-foreground">Prueba limpiando el buscador de resultados para ver la lista completa ya cargada.</p>
-          </div>
-          <div className="bg-muted/40 border border-border rounded-lg p-4 text-left space-y-2">
-            <label className="block text-sm font-medium">Filtrar resultados cargados</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-              <input
-                type="text"
-                value={filtroResultados}
-                onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
-                placeholder="Buscar dentro de los resultados ya obtenidos..."
-                className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
       {hasSearched && !isLoading && !error && licitaciones.length === 0 && (
         <div className="text-center py-16 bg-card border border-border rounded-lg">
           <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />

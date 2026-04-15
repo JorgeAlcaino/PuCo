@@ -58,10 +58,11 @@ Este repo ya incluye [render.yaml](render.yaml) para deploy automatico. El despl
   - instala dependencias Node con lockfile
   - compila frontend en dist/
 - Start:
-  - gunicorn app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 1 --threads 4
+  - gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1
 - Routing:
   - `/api/*` queda atendido por Flask
-  - cualquier ruta del frontend se resuelve con `dist/index.html`, permitiendo navegar en modo SPA
+  - rutas SPA del frontend se resuelven con `dist/index.html`
+  - assets faltantes (por ejemplo en `/assets/*`) responden 404 para evitar errores MIME
 
 ### Health check
 

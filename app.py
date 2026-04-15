@@ -32,6 +32,21 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300})
 
+
+@app.after_request
+def add_cache_headers(response):
+    """Prevent stale SPA/API responses while allowing long cache for hashed assets."""
+    path = request.path or ""
+
+    if path.startswith("/api/") or path in {"/", "/index.html"} or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    elif path.startswith("/assets/"):
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+
+    return response
+
 # ── Estado mappings ──────────────────────────────────────────────────────────
 
 # Map numeric codes returned in API response data → label

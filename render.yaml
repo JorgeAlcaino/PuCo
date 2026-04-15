@@ -5,7 +5,8 @@ services:
     buildCommand: |
       set -e
       npm install -g pnpm@10.33.0
-      pnpm install
+      pnpm install --frozen-lockfile
+      rm -rf dist
       pnpm run build
       ls -la dist/
       ls -la dist/assets/

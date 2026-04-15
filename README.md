@@ -33,6 +33,17 @@ python app.py
 
 El frontend usa proxy a http://localhost:5000 para /api.
 
+### Probar igual que en Render (producción)
+
+Para ver exactamente lo mismo que Render, ejecuta el backend sirviendo `dist/`:
+
+```bash
+pnpm run build
+python app.py
+```
+
+Luego abre `http://localhost:5000` y haz hard refresh (`Ctrl+F5`) para evitar caché del navegador.
+
 ## Deploy en Render
 
 Este repo ya incluye [render.yaml](render.yaml) para deploy automatico. El despliegue usa un solo web service en Render: Flask sirve la API y también el frontend compilado desde `dist/`, así que en producción no necesitas un servidor aparte para Vite.

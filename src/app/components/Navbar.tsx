@@ -28,6 +28,12 @@ export function Navbar() {
     }
   }, [apiKey]);
 
+  useEffect(() => {
+    const openApiKeyDialog = () => setDialogOpen(true);
+    window.addEventListener('mp-open-api-key', openApiKeyDialog);
+    return () => window.removeEventListener('mp-open-api-key', openApiKeyDialog);
+  }, []);
+
   const isActive = (path: string) => location.pathname === path;
 
   const openDialog = () => {

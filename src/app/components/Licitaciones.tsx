@@ -487,14 +487,14 @@ export function Licitaciones() {
           {loadingProgress
             ? <p className="text-muted-foreground">Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}...</p>
             : isSlow
-              ? <p className="text-muted-foreground">La consulta puede tardar varios minutos, por favor espera...</p>
+              ? <p className="text-muted-foreground">La consulta puede tardar varios minutos si la API está inestable, por favor espera...</p>
               : <p className="text-muted-foreground">Obteniendo licitaciones según tus filtros</p>
           }
         </div>
       )}
 
       {/* Resultados */}
-      {hasSearched && licitaciones.length > 0 && (
+      {hasSearched && licitacionesFiltradas.length > 0 && (
         <>
           {/* Banner de carga progresiva */}
           {isLoading && loadingProgress && (
@@ -531,283 +531,257 @@ export function Licitaciones() {
             </div>
           </div>
 
-          {licitacionesFiltradas.length > 0 ? (
-            <>
-              {/* Gráficos */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-card border border-border rounded-lg p-6">
-                  <h3 className="mb-4">Distribución por Estado</h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <PieChart>
-                      <Pie data={estadoStats} cx="50%" cy="50%" labelLine={false}
-                        label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                        outerRadius={80} dataKey="value">
-                        {estadoStats.map(e => <Cell key={e.name} fill={ESTADO_COLORS[e.name] ?? '#8884d8'} />)}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="bg-card border border-border rounded-lg p-6">
-                  <h3 className="mb-4">Distribución por Tipo</h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={tipoStats}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="name" stroke="var(--muted-foreground)" />
-                      <YAxis stroke="var(--muted-foreground)" />
-                      <Tooltip contentStyle={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.5rem' }} />
-                      <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                        {tipoStats.map(t => <Cell key={t.name} fill={TIPO_COLORS[t.name] ?? '#8884d8'} />)}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Tabla */}
-              <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-muted/50 border-b border-border">
-                      <tr>
-                        <th className="px-4 py-3 w-8"></th>
-                        <th className="px-4 py-3 text-left">Código</th>
-                        <th className="px-4 py-3 text-left">Nombre</th>
-                        <th className="px-4 py-3 text-left">Estado</th>
-                        <th className="px-4 py-3 text-left">Tipo</th>
-                        <th className="px-4 py-3 text-left">Región</th>
-                        <th className="px-4 py-3 text-left">Cierre</th>
-                        <th className="px-4 py-3 text-center">Ver</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {paginated.map(lic => (
-                        <Fragment key={lic.codigo}>
-                          <tr onClick={() => toggleDetail(lic.codigo)}
-                            className="hover:bg-muted/30 transition-colors cursor-pointer">
-                            <td className="px-4 py-4">
-                              <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${expandedCodigo === lic.codigo ? 'rotate-90' : ''}`} />
-                            </td>
-                            <td className="px-4 py-4"><span className="font-mono text-sm">{lic.codigo}</span></td>
-                            <td className="px-4 py-4 max-w-sm"><p className="line-clamp-2 text-sm">{lic.nombre}</p></td>
-                            <td className="px-4 py-4">
-                              <span className="px-3 py-1 rounded-full text-sm text-white"
-                                style={{ backgroundColor: ESTADO_COLORS[lic.estado] ?? '#6b7280' }}>
-                                {lic.estado}
-                              </span>
-                            </td>
-                            <td className="px-4 py-4">
-                              <span className="font-mono text-sm px-2 py-1 rounded text-white"
-                                style={{ backgroundColor: TIPO_COLORS[lic.tipo] ?? '#6b7280' }}>
-                                {lic.tipo || '—'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-4">
-                              <span className="text-sm text-muted-foreground">{lic.region || '—'}</span>
-                            </td>
-                            <td className="px-4 py-4">
-                              <div className="flex items-center gap-2">
-                                <Calendar className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm">{formatDate(lic.fechaCierre)}</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-4 text-center">
-                              <a href={lic.urlDetalle} target="_blank" rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="inline-flex items-center gap-1 text-primary hover:underline text-sm">
-                                <ExternalLink className="w-4 h-4" />
-                              </a>
-                            </td>
-                          </tr>
-                          {expandedCodigo === lic.codigo && (
-                            <tr key={`${lic.codigo}-detail`}>
-                              <td colSpan={8} className="p-0">
-                                <div className="bg-muted/20 border-t border-border p-6">
-                                  {detailLoading && (
-                                    <div className="flex items-center gap-3 text-muted-foreground">
-                                      <Loader2 className="w-5 h-5 animate-spin" />
-                                      <span>Cargando detalle completo...</span>
-                                    </div>
-                                  )}
-                                  {detailError && (
-                                    <div className="flex items-center gap-3 text-destructive">
-                                      <AlertCircle className="w-5 h-5" />
-                                      <span>{detailError}</span>
-                                    </div>
-                                  )}
-                                  {detailData && detailData.codigo === lic.codigo && (
-                                    <div className="space-y-4">
-                                      <div className="flex items-center justify-between">
-                                        <h4 className="font-semibold">Detalle Completo</h4>
-                                        <button onClick={(e) => { e.stopPropagation(); setExpandedCodigo(null); }}
-                                          className="p-1 hover:bg-muted rounded">
-                                          <X className="w-4 h-4" />
-                                        </button>
-                                      </div>
-                                      {detailData.descripcion && (
-                                        <p className="text-sm text-muted-foreground">{detailData.descripcion}</p>
-                                      )}
-                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><Building2 className="w-4 h-4" /> Organismo</h5>
-                                          <div className="text-sm space-y-1">
-                                            <p><span className="text-muted-foreground">Nombre:</span> {detailData.organismo || '—'}</p>
-                                            <p><span className="text-muted-foreground">Unidad:</span> {detailData.nombreUnidad || '—'}</p>
-                                            <p><span className="text-muted-foreground">RUT:</span> {detailData.rutUnidad || '—'}</p>
-                                            <p><span className="text-muted-foreground">Código:</span> {detailData.codigoOrganismo || '—'}</p>
-                                          </div>
-                                        </div>
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><DollarSign className="w-4 h-4" /> Financiero</h5>
-                                          <div className="text-sm space-y-1">
-                                            <p><span className="text-muted-foreground">Monto:</span> {detailData.monto && detailData.monto > 0 ? formatCurrency(detailData.monto) : 'No publicado'}</p>
-                                            <p><span className="text-muted-foreground">Moneda:</span> {detailData.moneda || '—'}</p>
-                                            <p><span className="text-muted-foreground">Tipo:</span> {detailData.tipoDescripcion || detailData.tipo}</p>
-                                            <p><span className="text-muted-foreground">Convocatoria:</span> {detailData.tipoConvocatoria || '—'}</p>
-                                          </div>
-                                        </div>
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><MapPin className="w-4 h-4" /> Ubicación</h5>
-                                          <div className="text-sm space-y-1">
-                                            <p><span className="text-muted-foreground">Región:</span> {detailData.region || '—'}</p>
-                                            <p><span className="text-muted-foreground">Comuna:</span> {detailData.comunaUnidad || '—'}</p>
-                                          </div>
-                                        </div>
-                                      </div>
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><Clock className="w-4 h-4" /> Fechas</h5>
-                                          <div className="text-sm grid grid-cols-2 gap-1">
-                                            <span className="text-muted-foreground">Creación:</span><span>{formatDate(detailData.fechaCreacion)}</span>
-                                            <span className="text-muted-foreground">Publicación:</span><span>{formatDate(detailData.fechaPublicacion)}</span>
-                                            <span className="text-muted-foreground">Cierre:</span><span>{formatDate(detailData.fechaCierre)}</span>
-                                            <span className="text-muted-foreground">Adjudicación:</span><span>{formatDate(detailData.fechaAdjudicacion)}</span>
-                                            <span className="text-muted-foreground">Est. Adjudicación:</span><span>{formatDate(detailData.fechaEstimadaAdjudicacion)}</span>
-                                          </div>
-                                        </div>
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><Users className="w-4 h-4" /> Participación</h5>
-                                          <div className="text-sm grid grid-cols-2 gap-1">
-                                            <span className="text-muted-foreground">Etapas:</span><span>{detailData.etapas ?? '—'}</span>
-                                            <span className="text-muted-foreground">Items:</span><span>{detailData.cantidadItems ?? '—'}</span>
-                                            <span className="text-muted-foreground">Reclamos:</span><span>{detailData.cantidadReclamos ?? '—'}</span>
-                                            <span className="text-muted-foreground">Oferentes:</span><span>{detailData.adjudicacionNumeroOferentes ?? '—'}</span>
-                                            <span className="text-muted-foreground">Días al cierre:</span><span>{detailData.diasCierreLicitacion ?? '—'}</span>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Paginación */}
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-card border border-border rounded-lg px-4 py-3">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <span>Mostrar</span>
-                  <select
-                    value={pageSize}
-                    onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                    className="border border-border rounded px-2 py-1 bg-background text-foreground text-sm"
-                  >
-                    {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                  <span>por página · {licitacionesFiltradas.length} resultados</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setCurrentPage(1)}
-                    disabled={currentPage === 1}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
-                  >«</button>
-                  <button
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
-                  >‹</button>
-                  {Array.from({ length: totalPages }, (_, i) => i + 1)
-                    .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
-                    .reduce<(number | '…')[]>((acc, p, idx, arr) => {
-                      if (idx > 0 && (arr[idx - 1] as number) < p - 1) acc.push('…');
-                      acc.push(p);
-                      return acc;
-                    }, [])
-                    .map((p, idx) =>
-                      p === '…'
-                        ? <span key={`ellipsis-${idx}`} className="px-2 py-1 text-sm text-muted-foreground">…</span>
-                        : <button
-                            key={p}
-                            onClick={() => setCurrentPage(p as number)}
-                            className={`px-3 py-1 rounded text-sm border transition-colors ${
-                              currentPage === p
-                                ? 'bg-primary text-primary-foreground border-primary'
-                                : 'border-border hover:bg-muted'
-                            }`}
-                          >{p}</button>
-                    )
-                  }
-                  <button
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
-                  >›</button>
-                  <button
-                    onClick={() => setCurrentPage(totalPages)}
-                    disabled={currentPage === totalPages}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
-                  >»</button>
-                </div>
-              </div>
-
-              <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <Search className="w-4 h-4 text-muted-foreground" />
-                  Filtrar resultados cargados
-                </div>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={filtroResultados}
-                    onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
-                    placeholder="Buscar dentro de los resultados ya obtenidos..."
-                    className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">Este filtro solo actúa sobre la lista ya cargada.</p>
-              </div>
-            </>
-          ) : (
-            <div className="text-center py-16 bg-card border border-border rounded-lg space-y-4">
-              <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-              <div>
-                <h3 className="mb-2">No hay coincidencias con el filtro adicional</h3>
-                <p className="text-muted-foreground">La búsqueda principal ya cargó resultados, pero este filtro no encontró coincidencias.</p>
-              </div>
-              <div className="bg-muted/40 border border-border rounded-lg p-4 text-left space-y-2">
-                <label className="block text-sm font-medium">Filtrar resultados cargados</label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={filtroResultados}
-                    onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
-                    placeholder="Buscar dentro de los resultados ya obtenidos..."
-                    className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">Borra este texto para volver a ver la lista completa.</p>
-              </div>
+          {/* Gráficos */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h3 className="mb-4">Distribución por Estado</h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <PieChart>
+                  <Pie data={estadoStats} cx="50%" cy="50%" labelLine={false}
+                    label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                    outerRadius={80} dataKey="value">
+                    {estadoStats.map(e => <Cell key={e.name} fill={ESTADO_COLORS[e.name] ?? '#8884d8'} />)}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
-          )}
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h3 className="mb-4">Distribución por Tipo</h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={tipoStats}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="name" stroke="var(--muted-foreground)" />
+                  <YAxis stroke="var(--muted-foreground)" />
+                  <Tooltip contentStyle={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.5rem' }} />
+                  <Bar dataKey="count" radius={[8, 8, 0, 0]}>
+                    {tipoStats.map(t => <Cell key={t.name} fill={TIPO_COLORS[t.name] ?? '#8884d8'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Tabla */}
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-muted/50 border-b border-border">
+                  <tr>
+                    <th className="px-4 py-3 w-8"></th>
+                    <th className="px-4 py-3 text-left">Código</th>
+                    <th className="px-4 py-3 text-left">Nombre</th>
+                    <th className="px-4 py-3 text-left">Estado</th>
+                    <th className="px-4 py-3 text-left">Tipo</th>
+                    <th className="px-4 py-3 text-left">Región</th>
+                    <th className="px-4 py-3 text-left">Cierre</th>
+                    <th className="px-4 py-3 text-center">Ver</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {paginated.map(lic => (
+                    <Fragment key={lic.codigo}>
+                      <tr onClick={() => toggleDetail(lic.codigo)}
+                        className="hover:bg-muted/30 transition-colors cursor-pointer">
+                        <td className="px-4 py-4">
+                          <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${expandedCodigo === lic.codigo ? 'rotate-90' : ''}`} />
+                        </td>
+                        <td className="px-4 py-4"><span className="font-mono text-sm">{lic.codigo}</span></td>
+                        <td className="px-4 py-4 max-w-sm"><p className="line-clamp-2 text-sm">{lic.nombre}</p></td>
+                        <td className="px-4 py-4">
+                          <span className="px-3 py-1 rounded-full text-sm text-white"
+                            style={{ backgroundColor: ESTADO_COLORS[lic.estado] ?? '#6b7280' }}>
+                            {lic.estado}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="font-mono text-sm px-2 py-1 rounded text-white"
+                            style={{ backgroundColor: TIPO_COLORS[lic.tipo] ?? '#6b7280' }}>
+                            {lic.tipo || '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm text-muted-foreground">{lic.region || '—'}</span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-sm">{formatDate(lic.fechaCierre)}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <a href={lic.urlDetalle} target="_blank" rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-primary hover:underline text-sm">
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        </td>
+                      </tr>
+                      {expandedCodigo === lic.codigo && (
+                        <tr key={`${lic.codigo}-detail`}>
+                          <td colSpan={8} className="p-0">
+                            <div className="bg-muted/20 border-t border-border p-6">
+                              {detailLoading && (
+                                <div className="flex items-center gap-3 text-muted-foreground">
+                                  <Loader2 className="w-5 h-5 animate-spin" />
+                                  <span>Cargando detalle completo...</span>
+                                </div>
+                              )}
+                              {detailError && (
+                                <div className="flex items-center gap-3 text-destructive">
+                                  <AlertCircle className="w-5 h-5" />
+                                  <span>{detailError}</span>
+                                </div>
+                              )}
+                              {detailData && detailData.codigo === lic.codigo && (
+                                <div className="space-y-4">
+                                  <div className="flex items-center justify-between">
+                                    <h4 className="font-semibold">Detalle Completo</h4>
+                                    <button onClick={(e) => { e.stopPropagation(); setExpandedCodigo(null); }}
+                                      className="p-1 hover:bg-muted rounded">
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                  {detailData.descripcion && (
+                                    <p className="text-sm text-muted-foreground">{detailData.descripcion}</p>
+                                  )}
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="space-y-3">
+                                      <h5 className="text-sm font-medium flex items-center gap-2"><Building2 className="w-4 h-4" /> Organismo</h5>
+                                      <div className="text-sm space-y-1">
+                                        <p><span className="text-muted-foreground">Nombre:</span> {detailData.organismo || '—'}</p>
+                                        <p><span className="text-muted-foreground">Unidad:</span> {detailData.nombreUnidad || '—'}</p>
+                                        <p><span className="text-muted-foreground">RUT:</span> {detailData.rutUnidad || '—'}</p>
+                                        <p><span className="text-muted-foreground">Código:</span> {detailData.codigoOrganismo || '—'}</p>
+                                      </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                      <h5 className="text-sm font-medium flex items-center gap-2"><DollarSign className="w-4 h-4" /> Financiero</h5>
+                                      <div className="text-sm space-y-1">
+                                        <p><span className="text-muted-foreground">Monto:</span> {detailData.monto && detailData.monto > 0 ? formatCurrency(detailData.monto) : 'No publicado'}</p>
+                                        <p><span className="text-muted-foreground">Moneda:</span> {detailData.moneda || '—'}</p>
+                                        <p><span className="text-muted-foreground">Tipo:</span> {detailData.tipoDescripcion || detailData.tipo}</p>
+                                        <p><span className="text-muted-foreground">Convocatoria:</span> {detailData.tipoConvocatoria || '—'}</p>
+                                      </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                      <h5 className="text-sm font-medium flex items-center gap-2"><MapPin className="w-4 h-4" /> Ubicación</h5>
+                                      <div className="text-sm space-y-1">
+                                        <p><span className="text-muted-foreground">Región:</span> {detailData.region || '—'}</p>
+                                        <p><span className="text-muted-foreground">Comuna:</span> {detailData.comunaUnidad || '—'}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-3">
+                                      <h5 className="text-sm font-medium flex items-center gap-2"><Clock className="w-4 h-4" /> Fechas</h5>
+                                      <div className="text-sm grid grid-cols-2 gap-1">
+                                        <span className="text-muted-foreground">Creación:</span><span>{formatDate(detailData.fechaCreacion)}</span>
+                                        <span className="text-muted-foreground">Publicación:</span><span>{formatDate(detailData.fechaPublicacion)}</span>
+                                        <span className="text-muted-foreground">Cierre:</span><span>{formatDate(detailData.fechaCierre)}</span>
+                                        <span className="text-muted-foreground">Adjudicación:</span><span>{formatDate(detailData.fechaAdjudicacion)}</span>
+                                        <span className="text-muted-foreground">Est. Adjudicación:</span><span>{formatDate(detailData.fechaEstimadaAdjudicacion)}</span>
+                                      </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                      <h5 className="text-sm font-medium flex items-center gap-2"><Users className="w-4 h-4" /> Participación</h5>
+                                      <div className="text-sm grid grid-cols-2 gap-1">
+                                        <span className="text-muted-foreground">Etapas:</span><span>{detailData.etapas ?? '—'}</span>
+                                        <span className="text-muted-foreground">Items:</span><span>{detailData.cantidadItems ?? '—'}</span>
+                                        <span className="text-muted-foreground">Reclamos:</span><span>{detailData.cantidadReclamos ?? '—'}</span>
+                                        <span className="text-muted-foreground">Oferentes:</span><span>{detailData.adjudicacionNumeroOferentes ?? '—'}</span>
+                                        <span className="text-muted-foreground">Días al cierre:</span><span>{detailData.diasCierreLicitacion ?? '—'}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Paginación */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-card border border-border rounded-lg px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Mostrar</span>
+              <select
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                className="border border-border rounded px-2 py-1 bg-background text-foreground text-sm"
+              >
+                {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <span>por página · {licitacionesFiltradas.length} resultados</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+              >«</button>
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+              >‹</button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                .reduce<(number | '…')[]>((acc, p, idx, arr) => {
+                  if (idx > 0 && (arr[idx - 1] as number) < p - 1) acc.push('…');
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((p, idx) =>
+                  p === '…'
+                    ? <span key={`ellipsis-${idx}`} className="px-2 py-1 text-sm text-muted-foreground">…</span>
+                    : <button
+                        key={p}
+                        onClick={() => setCurrentPage(p as number)}
+                        className={`px-3 py-1 rounded text-sm border transition-colors ${
+                          currentPage === p
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'border-border hover:bg-muted'
+                        }`}
+                      >{p}</button>
+                )
+              }
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+              >›</button>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+              >»</button>
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              Filtrar resultados cargados
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+              <input
+                type="text"
+                value={filtroResultados}
+                onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
+                placeholder="Buscar dentro de los resultados ya obtenidos..."
+                className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">Este filtro solo actúa sobre la lista ya cargada.</p>
+          </div>
         </>
       )}
 

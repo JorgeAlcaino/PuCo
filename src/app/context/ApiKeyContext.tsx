@@ -2,6 +2,26 @@ import { createContext, useContext, useState } from 'react';
 
 const LS_KEY = 'mp_api_ticket';
 
+const readStoredApiKey = () => {
+  try {
+    return localStorage.getItem(LS_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
+
+const persistApiKey = (value: string) => {
+  try {
+    if (value) {
+      localStorage.setItem(LS_KEY, value);
+    } else {
+      localStorage.removeItem(LS_KEY);
+    }
+  } catch {
+    // Ignore storage failures so the app still works in restrictive browsers.
+  }
+};
+
 interface ApiKeyContextType {
   apiKey: string;
   setApiKey: (key: string) => void;
@@ -10,16 +30,12 @@ interface ApiKeyContextType {
 const ApiKeyContext = createContext<ApiKeyContextType>({ apiKey: '', setApiKey: () => {} });
 
 export function ApiKeyProvider({ children }: { children: React.ReactNode }) {
-  const [apiKey, setApiKeyState] = useState<string>(() => localStorage.getItem(LS_KEY) ?? '');
+  const [apiKey, setApiKeyState] = useState<string>(() => readStoredApiKey());
 
   const setApiKey = (key: string) => {
     const trimmed = key.trim();
     setApiKeyState(trimmed);
-    if (trimmed) {
-      localStorage.setItem(LS_KEY, trimmed);
-    } else {
-      localStorage.removeItem(LS_KEY);
-    }
+    persistApiKey(trimmed);
   };
 
   return (

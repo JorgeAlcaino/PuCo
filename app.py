@@ -522,6 +522,9 @@ def _today_mp_date() -> str:
     return today.strftime("%d%m%Y")
 
 
+DEFAULT_LOOKBACK_DAYS = 7
+
+
 def _iso_to_mp_date(iso_date: str) -> str:
     """Convert YYYY-MM-DD (HTML date input) to ddmmyyyy for the MP API."""
     if not iso_date:
@@ -562,7 +565,9 @@ def _build_query_dates(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
         return [_iso_to_mp_date(fecha_inicio_iso)]
     if fecha_fin_iso:
         return [_iso_to_mp_date(fecha_fin_iso)]
-    return [_today_mp_date()]
+    end = datetime.now(tz=None)
+    start = end - timedelta(days=DEFAULT_LOOKBACK_DAYS - 1)
+    return [(start + timedelta(days=i)).strftime("%d%m%Y") for i in range(DEFAULT_LOOKBACK_DAYS)]
 
 
 # ── API routes ───────────────────────────────────────────────────────────────

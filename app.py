@@ -4,7 +4,11 @@ import hashlib
 import time
 import threading
 import warnings
-from datetime import datetime, timezone
+import re
+import random
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -32,6 +36,8 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 cache = Cache(app, config={"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300})
 
+CACHE_SCHEMA_VERSION = "2026-04-15-region-fix-2"
+
 
 @app.after_request
 def add_cache_headers(response):
@@ -55,6 +61,10 @@ ESTADO_LIC_BY_CODE = {
     "6": "Cerrada",
     "7": "Desierta",
     "8": "Adjudicada",
+    "9": "Desierta",
+    "14": "En evaluación",
+    "15": "En evaluación",
+    "16": "Suspendida",
     "18": "Revocada",
     "19": "Suspendida",
 }
@@ -73,10 +83,13 @@ ESTADO_OC_BY_CODE = {
     "1": "Enviada al Proveedor",
     "2": "Aceptada",
     "3": "Cancelada",
+    "4": "Recibida",
+    "5": "Enviada al Proveedor",
     "6": "Recepción Conforme",
     "7": "Pendiente",
     "8": "Parcialmente Recepcionada",
     "9": "Recepción Incompleta",
+    "10": "Anulada",
     "12": "En Proceso",
 }
 
@@ -107,6 +120,201 @@ def parse_date(value: str) -> str:
         except ValueError:
             continue
     return value[:10]
+
+
+REGION_CODE_TO_NAME = {
+    "1": "Tarapacá",
+    "2": "Antofagasta",
+    "3": "Atacama",
+    "4": "Coquimbo",
+    "5": "Valparaíso",
+    "6": "O'Higgins",
+    "7": "Maule",
+    "8": "Biobío",
+    "9": "La Araucanía",
+    "10": "Los Lagos",
+    "11": "Aysén",
+    "12": "Magallanes",
+    "13": "Metropolitana",
+    "14": "Los Ríos",
+    "15": "Arica y Parinacota",
+    "16": "Ñuble",
+}
+
+REGION_ROMAN_TO_CODE = {
+    "I": "1",
+    "II": "2",
+    "III": "3",
+    "IV": "4",
+    "V": "5",
+    "VI": "6",
+    "VII": "7",
+    "VIII": "8",
+    "IX": "9",
+    "X": "10",
+    "XI": "11",
+    "XII": "12",
+    "XIII": "13",
+    "XIV": "14",
+    "XV": "15",
+    "XVI": "16",
+}
+
+REGION_ALIAS_TO_NAME = {
+    "tarapaca": "Tarapacá",
+    "antofagasta": "Antofagasta",
+    "atacama": "Atacama",
+    "coquimbo": "Coquimbo",
+    "valparaiso": "Valparaíso",
+    "o higgins": "O'Higgins",
+    "ohiggins": "O'Higgins",
+    "libertador general bernardo o higgins": "O'Higgins",
+    "maule": "Maule",
+    "biobio": "Biobío",
+    "bio bio": "Biobío",
+    "la araucania": "La Araucanía",
+    "araucania": "La Araucanía",
+    "los lagos": "Los Lagos",
+    "aysen": "Aysén",
+    "aysen del general carlos ibanez del campo": "Aysén",
+    "magallanes": "Magallanes",
+    "magallanes y de la antartica chilena": "Magallanes",
+    "magallanes y la antartica chilena": "Magallanes",
+    "metropolitana": "Metropolitana",
+    "metropolitana de santiago": "Metropolitana",
+    "rm": "Metropolitana",
+    "region metropolitana": "Metropolitana",
+    "los rios": "Los Ríos",
+    "arica y parinacota": "Arica y Parinacota",
+    "nuble": "Ñuble",
+}
+
+
+def _normalize_text(value: str) -> str:
+    if value is None:
+        return ""
+    text = unicodedata.normalize("NFD", str(value).strip().lower())
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    return " ".join(text.split())
+
+
+def _first_non_empty(*values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            cleaned = value.strip()
+        else:
+            cleaned = str(value).strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+PREFERRED_REGION_KEYS = [
+    "RegionUnidad",
+    "NombreRegionUnidad",
+    "CodigoRegionUnidad",
+    "RegionComprador",
+    "NombreRegionComprador",
+    "CodigoRegionComprador",
+    "RegionOrganismo",
+    "NombreRegionOrganismo",
+    "CodigoRegionOrganismo",
+    "RegionSucursal",
+    "NombreRegionSucursal",
+    "CodigoRegionSucursal",
+    "Region",
+    "NombreRegion",
+    "CodigoRegion",
+]
+
+
+def _extract_region_candidate(*sources) -> str:
+    """Extract a likely region value from nested payloads even with varying key names."""
+    # 1) Strict preferred keys (top-level first)
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in PREFERRED_REGION_KEYS:
+            candidate = _first_non_empty(source.get(key))
+            if candidate:
+                return candidate
+
+    # 2) Recursive fallback for any scalar field containing "region"
+    stack = [s for s in sources if isinstance(s, (dict, list))]
+    visited = set()
+
+    while stack:
+        current = stack.pop()
+        obj_id = id(current)
+        if obj_id in visited:
+            continue
+        visited.add(obj_id)
+
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+                    continue
+                if value is None:
+                    continue
+                key_norm = _normalize_text(str(key))
+                if "region" not in key_norm:
+                    continue
+                candidate = _first_non_empty(value)
+                if candidate:
+                    return candidate
+        elif isinstance(current, list):
+            for item in current:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+
+    return ""
+
+
+def _region_code_from_value(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.isdigit():
+        return str(int(raw))
+
+    number_match = re.search(r"\b(\d{1,2})\b", raw)
+    if number_match:
+        return str(int(number_match.group(1)))
+
+    roman_match = re.search(r"\b(XVI|XV|XIV|XIII|XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)\b", raw.upper())
+    if roman_match:
+        return REGION_ROMAN_TO_CODE.get(roman_match.group(1), "")
+
+    return ""
+
+
+def _normalize_region(value) -> str:
+    raw = _first_non_empty(value)
+    if not raw:
+        return ""
+
+    region_code = _region_code_from_value(raw)
+    if region_code in REGION_CODE_TO_NAME:
+        return REGION_CODE_TO_NAME[region_code]
+
+    normalized = _normalize_text(raw)
+    for prefix in ("region de la ", "region del ", "region de ", "region "):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+            break
+
+    normalized = normalized.replace("republica de chile", "").strip()
+    if normalized in REGION_ALIAS_TO_NAME:
+        return REGION_ALIAS_TO_NAME[normalized]
+
+    for alias, canonical in REGION_ALIAS_TO_NAME.items():
+        if alias and alias in normalized:
+            return canonical
+
+    return raw
 
 
 TIPO_LICITACION_MAP = {
@@ -153,7 +361,39 @@ def normalize_licitacion(lic: dict) -> dict:
         estado = estado_raw  # API returned text label
     else:
         estado = ESTADO_LIC_BY_CODE.get(codigo_estado, f"Estado {codigo_estado}" if codigo_estado else "Desconocido")
-    tipo_code = lic.get("Tipo", "") or _extract_tipo_from_codigo(codigo)
+    tipo_code = (lic.get("Tipo", "") or _extract_tipo_from_codigo(codigo) or "").strip().upper()
+    comprador_dir = comprador.get("DireccionUnidad") if isinstance(comprador.get("DireccionUnidad"), dict) else {}
+    region_raw = _first_non_empty(
+        comprador.get("RegionUnidad"),
+        comprador.get("NombreRegionUnidad"),
+        comprador.get("CodigoRegionUnidad"),
+        comprador.get("Region"),
+        comprador.get("NombreRegion"),
+        comprador.get("CodigoRegion"),
+        comprador_dir.get("Region"),
+        comprador_dir.get("RegionUnidad"),
+        comprador_dir.get("NombreRegionUnidad"),
+        comprador_dir.get("CodigoRegionUnidad"),
+        comprador_dir.get("NombreRegion"),
+        comprador_dir.get("CodigoRegion"),
+        lic.get("RegionUnidad"),
+        lic.get("NombreRegionUnidad"),
+        lic.get("CodigoRegionUnidad"),
+        lic.get("RegionComprador"),
+        lic.get("NombreRegionComprador"),
+        lic.get("CodigoRegionComprador"),
+        lic.get("Region"),
+        lic.get("NombreRegion"),
+        lic.get("CodigoRegion"),
+    )
+    if not region_raw:
+        region_raw = _extract_region_candidate(lic, comprador, comprador_dir)
+    comuna_raw = _first_non_empty(
+        comprador.get("ComunaUnidad"),
+        comprador.get("Comuna"),
+        comprador_dir.get("Comuna"),
+        lic.get("Comuna"),
+    )
     return {
         "codigo": codigo,
         "nombre": lic.get("Nombre", ""),
@@ -170,23 +410,47 @@ def normalize_licitacion(lic: dict) -> dict:
         "fechaCierre": parse_date(lic.get("FechaCierre") or fechas.get("FechaCierre", "")),
         "fechaAdjudicacion": parse_date(fechas.get("FechaAdjudicacion", "")),
         "fechaEstimadaAdjudicacion": parse_date(fechas.get("FechaEstimadaAdjudicacion", "")),
-        "region": comprador.get("RegionUnidad", "") or comprador.get("Region", ""),
-        "comunaUnidad": comprador.get("ComunaUnidad", ""),
+        "region": _normalize_region(region_raw),
+        "comunaUnidad": comuna_raw,
         "tipo": tipo_code,
-        "tipoDescripcion": TIPO_LICITACION_MAP.get(tipo_code, tipo_code),
+        "tipoDescripcion": TIPO_LICITACION_MAP.get(tipo_code, "Tipo no informado"),
         "tipoConvocatoria": "Abierto" if lic.get("TipoConvocatoria") in (1, "1") else "Cerrada",
         "etapas": lic.get("Etapas", 1),
         "cantidadReclamos": lic.get("CantidadReclamos", 0),
         "cantidadItems": items.get("Cantidad", 0) if isinstance(items, dict) else 0,
         "diasCierreLicitacion": lic.get("DiasCierreLicitacion", 0),
         "adjudicacionNumeroOferentes": adjudicacion.get("NumeroOferentes", 0),
-        "urlDetalle": f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?qs={codigo}",
+        "urlDetalle": f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?IdLicitacion={codigo}",
     }
 
 
 TIPO_OC_BY_CODE = {
     "8": "SE",
     "9": "CM",
+    "10": "AG",
+    "11": "TD",
+    "12": "CC",
+}
+
+TIPO_OC_LABEL_BY_ABBR = {
+    "SE": "Sin emisión automática",
+    "CM": "Convenio Marco",
+    "AG": "Compra ágil",
+    "TD": "Trato directo",
+    "CC": "Compra coordinada",
+}
+
+TIPO_OC_ALIAS_TO_ABBR = {
+    "se": "SE",
+    "sin emision automatica": "SE",
+    "cm": "CM",
+    "convenio marco": "CM",
+    "ag": "AG",
+    "compra agil": "AG",
+    "td": "TD",
+    "trato directo": "TD",
+    "cc": "CC",
+    "compra coordinada": "CC",
 }
 
 TIPO_MONEDA_MAP = {
@@ -216,6 +480,32 @@ FORMA_PAGO_MAP = {
 }
 
 
+def _normalize_oc_tipo(tipo_code: str, tipo_raw: str, codigo: str) -> tuple[str, str]:
+    code = TIPO_OC_BY_CODE.get(tipo_code, "")
+    raw = (tipo_raw or "").strip()
+
+    if not code and raw:
+        raw_normalized = _normalize_text(raw)
+        if raw_normalized in TIPO_OC_ALIAS_TO_ABBR:
+            code = TIPO_OC_ALIAS_TO_ABBR[raw_normalized]
+        elif raw.upper() in TIPO_OC_LABEL_BY_ABBR:
+            code = raw.upper()
+
+    if not code:
+        extracted = _extract_tipo_from_codigo(codigo)
+        if extracted:
+            normalized_extracted = extracted.upper()
+            if normalized_extracted in TIPO_OC_LABEL_BY_ABBR:
+                code = normalized_extracted
+
+    label = TIPO_OC_LABEL_BY_ABBR.get(code)
+    if label:
+        return code, label
+    if raw:
+        return code or raw, raw
+    return code, "Tipo no informado"
+
+
 def normalize_orden_compra(oc: dict) -> dict:
     fechas = oc.get("Fechas") or {}
     comprador = oc.get("Comprador") or {}
@@ -223,11 +513,57 @@ def normalize_orden_compra(oc: dict) -> dict:
     items = oc.get("Items") or {}
     codigo = oc.get("Codigo", "")
     estado_code = str(oc.get("CodigoEstado", ""))
-    tipo_code = str(oc.get("CodigoTipo") or "")
-    tipo_text = TIPO_OC_BY_CODE.get(tipo_code, oc.get("Tipo", "")) or _extract_tipo_from_codigo(codigo)
+    estado_raw = oc.get("EstadoNombre") or oc.get("Estado") or ""
+    if isinstance(estado_raw, str) and estado_raw and not estado_raw.isdigit():
+        estado = estado_raw
+    else:
+        estado = ESTADO_OC_BY_CODE.get(estado_code, f"Estado {estado_code}" if estado_code else "Desconocido")
+    tipo_code = str(oc.get("CodigoTipo") or "").strip()
+    tipo, tipo_descripcion = _normalize_oc_tipo(tipo_code, str(oc.get("Tipo") or ""), codigo)
     tipo_moneda = oc.get("TipoMoneda", "")
     tipo_despacho = str(oc.get("TipoDespacho") or "")
     forma_pago = str(oc.get("FormaPago") or "")
+    comprador_dir = comprador.get("DireccionUnidad") if isinstance(comprador.get("DireccionUnidad"), dict) else {}
+    proveedor_dir = proveedor.get("Direccion") if isinstance(proveedor.get("Direccion"), dict) else {}
+    region_raw = _first_non_empty(
+        comprador.get("RegionUnidad"),
+        comprador.get("NombreRegionUnidad"),
+        comprador.get("CodigoRegionUnidad"),
+        comprador.get("Region"),
+        comprador.get("NombreRegion"),
+        comprador.get("CodigoRegion"),
+        comprador_dir.get("Region"),
+        comprador_dir.get("RegionUnidad"),
+        comprador_dir.get("NombreRegionUnidad"),
+        comprador_dir.get("CodigoRegionUnidad"),
+        comprador_dir.get("NombreRegion"),
+        comprador_dir.get("CodigoRegion"),
+        proveedor.get("Region"),
+        proveedor.get("RegionSucursal"),
+        proveedor.get("NombreRegionSucursal"),
+        proveedor.get("CodigoRegionSucursal"),
+        proveedor.get("NombreRegion"),
+        proveedor.get("CodigoRegion"),
+        proveedor_dir.get("Region"),
+        proveedor_dir.get("RegionSucursal"),
+        proveedor_dir.get("NombreRegionSucursal"),
+        proveedor_dir.get("CodigoRegionSucursal"),
+        proveedor_dir.get("NombreRegion"),
+        oc.get("RegionUnidad"),
+        oc.get("NombreRegionUnidad"),
+        oc.get("CodigoRegionUnidad"),
+        oc.get("Region"),
+        oc.get("NombreRegion"),
+        oc.get("CodigoRegion"),
+    )
+    if not region_raw:
+        region_raw = _extract_region_candidate(oc, comprador, comprador_dir, proveedor, proveedor_dir)
+    comuna_raw = _first_non_empty(
+        comprador.get("ComunaUnidad"),
+        comprador.get("Comuna"),
+        comprador_dir.get("Comuna"),
+        oc.get("Comuna"),
+    )
     return {
         "codigo": codigo,
         "producto": oc.get("Nombre", ""),
@@ -235,10 +571,11 @@ def normalize_orden_compra(oc: dict) -> dict:
         "proveedor": proveedor.get("Nombre", ""),
         "rutProveedor": proveedor.get("RutSucursal", ""),
         "organismo": comprador.get("NombreOrganismo", ""),
-        "estado": ESTADO_OC_BY_CODE.get(estado_code, f"Estado {estado_code}"),
+        "estado": estado,
         "estadoProveedor": oc.get("EstadoProveedor", ""),
-        "tipo": tipo_text,
-        "tipoMoneda": tipo_moneda,
+        "tipo": tipo,
+        "tipoDescripcion": tipo_descripcion,
+        "tipoMoneda": TIPO_MONEDA_MAP.get(tipo_moneda, tipo_moneda),
         "monto": float(oc.get("Total") or oc.get("TotalNeto") or 0),
         "totalNeto": float(oc.get("TotalNeto") or 0),
         "impuestos": float(oc.get("Impuestos") or 0),
@@ -250,18 +587,18 @@ def normalize_orden_compra(oc: dict) -> dict:
         "fechaAceptacion": parse_date(fechas.get("FechaAceptacion", "")),
         "fechaCancelacion": parse_date(fechas.get("FechaCancelacion", "")),
         "fechaUltimaModificacion": parse_date(fechas.get("FechaUltimaModificacion", "")),
-        "region": comprador.get("RegionUnidad", "") or proveedor.get("Region", ""),
-        "comunaComprador": comprador.get("ComunaUnidad", ""),
+        "region": _normalize_region(region_raw),
+        "comunaComprador": comuna_raw,
         "tipoDespacho": TIPO_DESPACHO_MAP.get(tipo_despacho, tipo_despacho),
         "formaPago": FORMA_PAGO_MAP.get(forma_pago, forma_pago),
         "financiamiento": oc.get("Financiamiento", ""),
         "codigoLicitacion": oc.get("CodigoLicitacion", ""),
-        "urlDetalle": f"https://www.mercadopublico.cl/Procurement/Modules/PO/DetailsPurchaseOrder.aspx?qs={codigo}",
+        "urlDetalle": f"https://www.mercadopublico.cl/PurchaseOrder/Modules/PO/DetailsPurchaseOrder.aspx?codigoOC={codigo}",
     }
 
 
 def cache_key_from_params(prefix: str, params: dict) -> str:
-    raw = f"{prefix}_{sorted(params.items())}"
+    raw = f"{CACHE_SCHEMA_VERSION}_{prefix}_{sorted(params.items())}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -269,22 +606,107 @@ def cache_key_from_params(prefix: str, params: dict) -> str:
 _api_lock = threading.Lock()
 _last_api_call = 0.0
 
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+MP_MAX_RETRIES = max(0, _int_env("MP_MAX_RETRIES", 3))
+MP_BASE_BACKOFF_SECONDS = 0.5
+MP_MAX_BACKOFF_SECONDS = 8.0
+MP_MIN_REQUEST_INTERVAL_SECONDS = 0.35
+MP_CIRCUIT_FAILURE_THRESHOLD = max(1, _int_env("MP_CIRCUIT_FAILURE_THRESHOLD", 5))
+MP_CIRCUIT_RESET_SECONDS = max(5, _int_env("MP_CIRCUIT_RESET_SECONDS", 45))
+MP_JOB_MAX_WORKERS = max(1, min(4, _int_env("MP_JOB_MAX_WORKERS", 3)))
+
+
+class SimpleCircuitBreaker:
+    """Small in-process circuit breaker to fail fast and auto-recover."""
+
+    def __init__(self, failure_threshold: int, reset_seconds: int):
+        self.failure_threshold = failure_threshold
+        self.reset_seconds = reset_seconds
+        self.failure_count = 0
+        self.opened_at = 0.0
+        self.state = "closed"  # closed | open | half-open
+        self.lock = threading.Lock()
+
+    def call(self, func):
+        with self.lock:
+            if self.state == "open":
+                elapsed = time.time() - self.opened_at
+                if elapsed < self.reset_seconds:
+                    raise RuntimeError("Servicio temporalmente inestable. Reintentando automáticamente en breve.")
+                self.state = "half-open"
+
+        try:
+            result = func()
+        except Exception:
+            with self.lock:
+                now = time.time()
+                if self.state == "half-open":
+                    self.state = "open"
+                    self.opened_at = now
+                    self.failure_count = self.failure_threshold
+                else:
+                    self.failure_count += 1
+                    if self.failure_count >= self.failure_threshold:
+                        self.state = "open"
+                        self.opened_at = now
+            raise
+
+        with self.lock:
+            self.state = "closed"
+            self.failure_count = 0
+            self.opened_at = 0.0
+        return result
+
+
+mp_circuit_breaker = SimpleCircuitBreaker(
+    failure_threshold=MP_CIRCUIT_FAILURE_THRESHOLD,
+    reset_seconds=MP_CIRCUIT_RESET_SECONDS,
+)
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    return status_code in {408, 425, 429, 500, 502, 503, 504}
+
+
+def _backoff_seconds(attempt: int) -> float:
+    base = min(MP_BASE_BACKOFF_SECONDS * (2 ** attempt), MP_MAX_BACKOFF_SECONDS)
+    return base * random.uniform(0.9, 1.1)
+
+
+def _throttle_mp_api() -> None:
+    global _last_api_call
+    with _api_lock:
+        elapsed = time.time() - _last_api_call
+        wait_for = MP_MIN_REQUEST_INTERVAL_SECONDS - elapsed
+        if wait_for > 0:
+            time.sleep(wait_for)
+        _last_api_call = time.time()
+
 # ── Background job store (single-process, --workers 1 required) ──────────────
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 
+JOB_FINISHED_TTL_SECONDS = 600
+JOB_PENDING_STALE_SECONDS = 24 * 60 * 60
 
-def call_mp_api(endpoint: str, params: dict, retries: int = 2):
-    """Call Mercado Público API with retry and rate-limit guard."""
-    global _last_api_call
-    last_err = None
-    for attempt in range(1 + retries):
-        with _api_lock:
-            # Ensure at least 0.4s between API calls
-            elapsed = time.time() - _last_api_call
-            if elapsed < 0.4:
-                time.sleep(0.4 - elapsed)
+
+def call_mp_api(endpoint: str, params: dict, retries: int = MP_MAX_RETRIES):
+    """Call Mercado Público API with exponential retry, jitter and circuit breaker."""
+
+    def _request_with_retry():
+        last_err = None
+        max_attempts = 1 + max(0, retries)
+
+        for attempt in range(max_attempts):
             try:
+                _throttle_mp_api()
                 resp = requests.get(
                     f"{MP_API_BASE}/{endpoint}",
                     params=params,
@@ -292,29 +714,45 @@ def call_mp_api(endpoint: str, params: dict, retries: int = 2):
                     timeout=90,
                     verify=False,
                 )
-                _last_api_call = time.time()
-            except requests.Timeout as e:
-                _last_api_call = time.time()
+
+                if _is_retryable_status(resp.status_code):
+                    raise requests.HTTPError(f"Error HTTP {resp.status_code}", response=resp)
+
+                resp.raise_for_status()
+                data = resp.json()
+
+                # API may return application-level errors with 200
+                if isinstance(data, dict) and "Codigo" in data and "Listado" not in data:
+                    try:
+                        codigo = int(data.get("Codigo") or 0)
+                    except (TypeError, ValueError):
+                        codigo = 0
+                    mensaje = data.get("Mensaje", "Error desconocido")
+                    if codigo == 10500:
+                        fake_resp = type("R", (), {"status_code": 429})()
+                        raise requests.HTTPError(f"Rate limited: {mensaje}", response=fake_resp)
+                    raise RuntimeError(f"API error {codigo}: {mensaje}")
+
+                return data
+
+            except requests.HTTPError as e:
+                status_code = getattr(getattr(e, "response", None), "status_code", 0)
                 last_err = e
-                if attempt < retries:
-                    time.sleep(1)
+                if attempt < max_attempts - 1 and _is_retryable_status(status_code):
+                    time.sleep(_backoff_seconds(attempt))
                     continue
                 raise
-        resp.raise_for_status()
-        data = resp.json()
-        # API may return application-level errors with 200 or non-200 status
-        if isinstance(data, dict) and "Codigo" in data and "Listado" not in data:
-            codigo = data.get("Codigo", 0)
-            mensaje = data.get("Mensaje", "Error desconocido")
-            if codigo == 10500:
-                last_err = requests.HTTPError("Rate limited", response=type("R", (), {"status_code": 429})())
-                if attempt < retries:
-                    time.sleep(2)
+
+            except (requests.Timeout, requests.ConnectionError, requests.RequestException, ValueError) as e:
+                last_err = e
+                if attempt < max_attempts - 1:
+                    time.sleep(_backoff_seconds(attempt))
                     continue
-                raise last_err
-            raise RuntimeError(f"API error {codigo}: {mensaje}")
-        return data
-    raise last_err or RuntimeError("Max retries exceeded")
+                raise
+
+        raise last_err or RuntimeError("Max retries exceeded")
+
+    return mp_circuit_breaker.call(_request_with_retry)
 
 
 def _today_mp_date() -> str:
@@ -332,6 +770,88 @@ def _iso_to_mp_date(iso_date: str) -> str:
     return iso_date
 
 
+def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
+    """Build inclusive day-by-day date range in ddmmyyyy format."""
+    if not fecha_inicio_iso or not fecha_fin_iso:
+        return []
+    try:
+        start = datetime.strptime(fecha_inicio_iso, "%Y-%m-%d")
+        end = datetime.strptime(fecha_fin_iso, "%Y-%m-%d")
+    except ValueError:
+        return []
+    if end < start:
+        start, end = end, start
+    days = (end - start).days + 1
+    return [(start + timedelta(days=i)).strftime("%d%m%Y") for i in range(days)]
+
+
+def _build_query_dates(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
+    """Build dates for API calls: range if provided, else a single selected/today day."""
+    if fecha_inicio_iso and fecha_fin_iso:
+        date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso)
+        if date_range:
+            return date_range
+    if fecha_inicio_iso:
+        return [_iso_to_mp_date(fecha_inicio_iso)]
+    if fecha_fin_iso:
+        return [_iso_to_mp_date(fecha_fin_iso)]
+    return [_today_mp_date()]
+
+
+def _cleanup_old_jobs(now: float | None = None) -> None:
+    """Remove stale pending jobs and completed jobs after a short TTL."""
+    current_time = now if now is not None else time.time()
+    with _jobs_lock:
+        to_delete = []
+        for job_id, job in _jobs.items():
+            age = current_time - job.get("ts", 0)
+            status = job.get("status")
+            if status == "pending":
+                if age > JOB_PENDING_STALE_SECONDS:
+                    to_delete.append(job_id)
+            elif age > JOB_FINISHED_TTL_SECONDS:
+                to_delete.append(job_id)
+        for job_id in to_delete:
+            del _jobs[job_id]
+
+
+def _touch_job(job_id: str) -> None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["ts"] = time.time()
+
+
+def _set_job_partial(job_id: str, partial: dict) -> None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None or job.get("status") != "pending":
+            return
+        job["partial"] = partial
+        job["ts"] = time.time()
+
+
+def _set_job_done(job_id: str, data: dict) -> None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        job.update({"status": "done", "data": data, "ts": time.time()})
+        job.pop("error", None)
+        job.pop("recoverable", None)
+        job.pop("partial", None)
+
+
+def _set_job_error(job_id: str, error_msg: str, fallback_data: dict | None = None, recoverable: bool = False) -> None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        job.update({"status": "error", "error": error_msg, "recoverable": recoverable, "ts": time.time()})
+        if fallback_data is not None:
+            job["data"] = fallback_data
+
+
 # ── API routes ───────────────────────────────────────────────────────────────
 
 def _apply_filters_and_sort(listado: list, args: dict) -> list:
@@ -346,7 +866,8 @@ def _apply_filters_and_sort(listado: list, args: dict) -> list:
         listado = [r for r in listado if r["tipo"] == tipo]
     region = args.get("region", "")
     if region and region != "Todas":
-        listado = [r for r in listado if region.lower() in r["region"].lower()]
+        region_norm = _normalize_text(region)
+        listado = [r for r in listado if region_norm in _normalize_text(r.get("region", ""))]
     sort_field = args.get("sortField", "fechaPublicacion")
     reverse = args.get("sortOrder", "desc") == "desc"
     if sort_field == "monto":
@@ -356,29 +877,218 @@ def _apply_filters_and_sort(listado: list, args: dict) -> list:
     return listado
 
 
-def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str) -> None:
-    """Background thread: calls MP API, applies filters, stores result in job store and cache."""
+def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_range: list[str]) -> None:
+    """Background thread: fetches day range in parallel, preserving partial progress on failures."""
     try:
-        data = call_mp_api("licitaciones.json", mp_params)
-        listado = [normalize_licitacion(l) for l in (data.get("Listado") or [])]
-        listado = _apply_filters_and_sort(listado, all_args)
-        output = {"total": len(listado), "listado": listado}
+        all_listado: list[dict] = []
+        seen_codes: set[str] = set()
+        failed_days: list[str] = []
+        failed_day_samples: list[str] = []
+        total_days = max(1, len(date_range))
+        workers = 1 if total_days <= 1 else min(MP_JOB_MAX_WORKERS, total_days)
+
+        def _fetch_day(fecha: str) -> tuple[list[dict], str | None]:
+            params = {**mp_params, "fecha": fecha}
+            try:
+                data = call_mp_api("licitaciones.json", params)
+                return [normalize_licitacion(lic) for lic in (data.get("Listado") or [])], None
+            except Exception as exc:
+                return [], str(exc)
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(_fetch_day, fecha): fecha for fecha in date_range}
+
+            for future in as_completed(future_map):
+                _touch_job(job_id)
+                fecha = future_map[future]
+                day_items: list[dict]
+                day_error: str | None
+
+                try:
+                    day_items, day_error = future.result()
+                except Exception as exc:
+                    day_items, day_error = [], str(exc)
+
+                completed += 1
+
+                if day_error:
+                    failed_days.append(fecha)
+                    if len(failed_day_samples) < 3:
+                        failed_day_samples.append(f"{fecha}: {day_error}")
+                else:
+                    for item in day_items:
+                        code = item.get("codigo", "")
+                        if code and code in seen_codes:
+                            continue
+                        if code:
+                            seen_codes.add(code)
+                        all_listado.append(item)
+
+                partial = _apply_filters_and_sort(list(all_listado), all_args)
+                partial_payload = {
+                    "total": len(partial),
+                    "listado": partial,
+                    "progress": completed,
+                    "totalDays": total_days,
+                }
+                if failed_days:
+                    partial_payload["failedDays"] = len(failed_days)
+                    partial_payload["warning"] = (
+                        f"Se omitieron {len(failed_days)} día(s) por fallos temporales. "
+                        "Seguimos intentando con los días restantes."
+                    )
+                _set_job_partial(job_id, partial_payload)
+
+        all_listado = _apply_filters_and_sort(all_listado, all_args)
+        output = {"total": len(all_listado), "listado": all_listado}
+        if failed_days:
+            output["failedDays"] = len(failed_days)
+            output["failedDaySamples"] = failed_day_samples
+            output["warning"] = (
+                f"Consulta completada con datos parciales: {len(failed_days)} día(s) fallaron. "
+                "Intenta nuevamente para completar el historial."
+            )
+
+        if not all_listado and failed_days and len(failed_days) >= total_days:
+            _set_job_error(
+                job_id,
+                "No se pudo recuperar información por ahora. Reintentaremos automáticamente en la siguiente consulta.",
+                fallback_data=output,
+                recoverable=True,
+            )
+            return
+
         with app.app_context():
             cache.set(ck, output)
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "done", "data": output})
-    except requests.Timeout:
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "error", "error": "La API del Mercado Público tardó demasiado"})
-    except requests.HTTPError as e:
-        code = getattr(e.response, "status_code", 502)
-        msg = ("Demasiadas solicitudes simultáneas, intenta de nuevo en unos segundos"
-               if code == 429 else f"Error HTTP {code} de la API")
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "error", "error": msg})
+        _set_job_done(job_id, output)
     except Exception as e:
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "error", "error": str(e)})
+        fallback_data = None
+        if "all_listado" in locals() and all_listado:
+            safe_list = _apply_filters_and_sort(list(all_listado), all_args)
+            fallback_data = {"total": len(safe_list), "listado": safe_list}
+        _set_job_error(job_id, str(e), fallback_data=fallback_data, recoverable=True)
+
+
+def _apply_oc_filters_and_sort(listado: list, args: dict) -> list:
+    """Apply client-side filters and sorting to an OC list."""
+    busqueda = args.get("busqueda", "").strip().lower()
+    if busqueda:
+        listado = [r for r in listado if busqueda in r["producto"].lower()
+                   or busqueda in r["proveedor"].lower()
+                   or busqueda in r["organismo"].lower()
+                   or busqueda in r["codigo"].lower()]
+
+    tipo = args.get("tipo", "")
+    if tipo:
+        listado = [r for r in listado if r.get("tipo", "") == tipo]
+
+    region = args.get("region", "")
+    if region and region != "Todas":
+        region_norm = _normalize_text(region)
+        listado = [r for r in listado if region_norm in _normalize_text(r.get("region", ""))]
+
+    sort_field = args.get("sortField", "codigo")
+    reverse = args.get("sortOrder", "desc") == "desc"
+    if sort_field == "monto":
+        listado.sort(key=lambda x: x.get("monto") or 0, reverse=reverse)
+    else:
+        listado.sort(key=lambda x: x.get(sort_field) or "", reverse=reverse)
+    return listado
+
+
+def _run_oc_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_range: list[str]) -> None:
+    """Background thread: fetches OC day-by-day in parallel and keeps partial snapshots."""
+    try:
+        all_listado: list[dict] = []
+        seen_codes: set[str] = set()
+        failed_days: list[str] = []
+        failed_day_samples: list[str] = []
+        total_days = max(1, len(date_range))
+        workers = 1 if total_days <= 1 else min(MP_JOB_MAX_WORKERS, total_days)
+
+        def _fetch_day(fecha: str) -> tuple[list[dict], str | None]:
+            params = {**mp_params, "fecha": fecha}
+            try:
+                data = call_mp_api("ordenesdecompra.json", params)
+                raw_list = data if isinstance(data, list) else (data.get("Listado") or [])
+                return [normalize_orden_compra(oc) for oc in raw_list], None
+            except Exception as exc:
+                return [], str(exc)
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(_fetch_day, fecha): fecha for fecha in date_range}
+
+            for future in as_completed(future_map):
+                _touch_job(job_id)
+                fecha = future_map[future]
+                day_items: list[dict]
+                day_error: str | None
+
+                try:
+                    day_items, day_error = future.result()
+                except Exception as exc:
+                    day_items, day_error = [], str(exc)
+
+                completed += 1
+
+                if day_error:
+                    failed_days.append(fecha)
+                    if len(failed_day_samples) < 3:
+                        failed_day_samples.append(f"{fecha}: {day_error}")
+                else:
+                    for item in day_items:
+                        code = item.get("codigo", "")
+                        if code and code in seen_codes:
+                            continue
+                        if code:
+                            seen_codes.add(code)
+                        all_listado.append(item)
+
+                partial = _apply_oc_filters_and_sort(list(all_listado), all_args)
+                partial_payload = {
+                    "total": len(partial),
+                    "listado": partial,
+                    "progress": completed,
+                    "totalDays": total_days,
+                }
+                if failed_days:
+                    partial_payload["failedDays"] = len(failed_days)
+                    partial_payload["warning"] = (
+                        f"Se omitieron {len(failed_days)} día(s) por fallos temporales. "
+                        "Seguimos intentando con los días restantes."
+                    )
+                _set_job_partial(job_id, partial_payload)
+
+        all_listado = _apply_oc_filters_and_sort(all_listado, all_args)
+        output = {"total": len(all_listado), "listado": all_listado}
+        if failed_days:
+            output["failedDays"] = len(failed_days)
+            output["failedDaySamples"] = failed_day_samples
+            output["warning"] = (
+                f"Consulta completada con datos parciales: {len(failed_days)} día(s) fallaron. "
+                "Intenta nuevamente para completar el historial."
+            )
+
+        if not all_listado and failed_days and len(failed_days) >= total_days:
+            _set_job_error(
+                job_id,
+                "No se pudo recuperar información por ahora. Reintentaremos automáticamente en la siguiente consulta.",
+                fallback_data=output,
+                recoverable=True,
+            )
+            return
+
+        with app.app_context():
+            cache.set(ck, output)
+        _set_job_done(job_id, output)
+    except Exception as e:
+        fallback_data = None
+        if "all_listado" in locals() and all_listado:
+            safe_list = _apply_oc_filters_and_sort(list(all_listado), all_args)
+            fallback_data = {"total": len(safe_list), "listado": safe_list}
+        _set_job_error(job_id, str(e), fallback_data=fallback_data, recoverable=True)
 
 
 @app.route("/api/licitaciones")
@@ -417,11 +1127,11 @@ def get_licitaciones():
         cache.set(ck, output)
         return jsonify(output)
 
-    # --- Date-based listing: slow (MP API ~50s), use background job ---
-    fecha = _iso_to_mp_date(request.args.get("fechaInicio", ""))
-    if not fecha:
-        fecha = _today_mp_date()
-    mp_params["fecha"] = fecha
+    # --- Date range listing: API queried day-by-day in a background job ---
+    fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
+    fecha_fin_iso = request.args.get("fechaFin", "").strip()
+    query_dates = _build_query_dates(fecha_inicio_iso, fecha_fin_iso)
+    mp_params["fecha"] = query_dates[0]
 
     estado = request.args.get("estado", "")
     if estado and estado != "Todos":
@@ -434,11 +1144,8 @@ def get_licitaciones():
     if cached is not None:
         return jsonify(cached)
 
+    _cleanup_old_jobs()
     with _jobs_lock:
-        # Clean up jobs older than 10 minutes
-        now = time.time()
-        for k in [k for k, v in _jobs.items() if now - v.get("ts", 0) > 600]:
-            del _jobs[k]
         # Reuse an existing pending job for the same filters
         for jid, job in _jobs.items():
             if job.get("ck") == ck and job["status"] == "pending":
@@ -447,7 +1154,7 @@ def get_licitaciones():
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
 
-    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck), daemon=True)
+    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck, query_dates), daemon=True)
     t.start()
     return jsonify({"status": "pending", "jobId": job_id}), 202
 
@@ -455,14 +1162,29 @@ def get_licitaciones():
 @app.route("/api/jobs/<job_id>")
 def get_job(job_id: str):
     with _jobs_lock:
-        job = _jobs.get(job_id)
+        raw_job = _jobs.get(job_id)
+        job = dict(raw_job) if raw_job is not None else None
     if job is None:
         return jsonify({"error": "Job no encontrado o expirado"}), 404
     if job["status"] == "pending":
+        _touch_job(job_id)
+        partial = job.get("partial")
+        if partial:
+            return jsonify({"status": "pending", "partial": partial}), 200
         return jsonify({"status": "pending"}), 200
     if job["status"] == "done":
         return jsonify({"status": "done", "data": job["data"]}), 200
-    return jsonify({"status": "error", "error": job.get("error", "Error desconocido")}), 200
+
+    payload = {
+        "status": "error",
+        "error": job.get("error", "Error desconocido"),
+        "recoverable": bool(job.get("recoverable", False)),
+    }
+    if job.get("partial") is not None:
+        payload["partial"] = job["partial"]
+    if job.get("data") is not None:
+        payload["data"] = job["data"]
+    return jsonify(payload), 200
 
 
 @app.route("/api/ordenes-compra")
@@ -498,13 +1220,14 @@ def get_ordenes_compra():
         cache.set(ck, output)
         return jsonify(output)
 
-    # --- Listing by date (required) + optional estado ---
+    # --- Listing by date range (day-by-day) + optional estado ---
     params = {"ticket": ticket}
+    all_args = dict(request.args)
 
-    fecha = _iso_to_mp_date(request.args.get("fechaInicio", ""))
-    if not fecha:
-        fecha = _today_mp_date()
-    params["fecha"] = fecha
+    fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
+    fecha_fin_iso = request.args.get("fechaFin", "").strip()
+    query_dates = _build_query_dates(fecha_inicio_iso, fecha_fin_iso)
+    params["fecha"] = query_dates[0]
 
     estado = request.args.get("estado", "")
     if estado and estado != "Todos":
@@ -512,54 +1235,22 @@ def get_ordenes_compra():
         if api_estado:
             params["estado"] = api_estado
 
-    ck = cache_key_from_params("oc", params)
+    ck = cache_key_from_params("oc", all_args)
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
 
-    try:
-        data = call_mp_api("ordenesdecompra.json", params)
-    except requests.Timeout:
-        return jsonify({"error": "La API del Mercado Público tardó demasiado"}), 504
-    except requests.HTTPError as e:
-        code = getattr(e.response, "status_code", 502)
-        if code == 429:
-            return jsonify({"error": "Demasiadas solicitudes simultáneas, intenta de nuevo en unos segundos"}), 429
-        return jsonify({"error": f"Error HTTP {code} de la API"}), 502
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 502
-    except requests.RequestException as e:
-        return jsonify({"error": str(e)}), 502
+    _cleanup_old_jobs()
+    with _jobs_lock:
+        for jid, job in _jobs.items():
+            if job.get("ck") == ck and job["status"] == "pending":
+                return jsonify({"status": "pending", "jobId": jid}), 202
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
 
-    raw_list = data if isinstance(data, list) else (data.get("Listado") or [])
-    listado = [normalize_orden_compra(o) for o in raw_list]
-
-    # --- Client-side filters ---
-    busqueda = request.args.get("busqueda", "").strip().lower()
-    if busqueda:
-        listado = [r for r in listado if busqueda in r["producto"].lower()
-                   or busqueda in r["proveedor"].lower()
-                   or busqueda in r["organismo"].lower()
-                   or busqueda in r["codigo"].lower()]
-
-    tipo = request.args.get("tipo", "")
-    if tipo:
-        listado = [r for r in listado if r.get("tipo", "") == tipo]
-
-    region = request.args.get("region", "")
-    if region and region != "Todas":
-        listado = [r for r in listado if region.lower() in r["region"].lower()]
-
-    sort_field = request.args.get("sortField", "codigo")
-    reverse = request.args.get("sortOrder", "desc") == "desc"
-    if sort_field == "monto":
-        listado.sort(key=lambda x: x.get("monto") or 0, reverse=reverse)
-    else:
-        listado.sort(key=lambda x: x.get(sort_field) or "", reverse=reverse)
-
-    output = {"total": len(listado), "listado": listado}
-    cache.set(ck, output)
-    return jsonify(output)
+    t = threading.Thread(target=_run_oc_job, args=(job_id, params, all_args, ck, query_dates), daemon=True)
+    t.start()
+    return jsonify({"status": "pending", "jobId": job_id}), 202
 
 
 @app.route("/api/licitacion/<codigo>")

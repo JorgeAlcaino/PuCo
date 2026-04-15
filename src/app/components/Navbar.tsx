@@ -23,16 +23,13 @@ export function Navbar() {
   const [inputValue, setInputValue] = useState('');
 
   useEffect(() => {
-    if (!apiKey) {
+    const openApiKeyDialog = () => {
+      setInputValue(apiKey);
       setDialogOpen(true);
-    }
-  }, [apiKey]);
-
-  useEffect(() => {
-    const openApiKeyDialog = () => setDialogOpen(true);
+    };
     window.addEventListener('mp-open-api-key', openApiKeyDialog);
     return () => window.removeEventListener('mp-open-api-key', openApiKeyDialog);
-  }, []);
+  }, [apiKey]);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -52,9 +49,9 @@ export function Navbar() {
       <div className="container mx-auto px-4">
         <div className="flex h-16 items-center justify-between">
           <div className="flex items-center gap-8">
-            <h1 className="flex items-center gap-2">
+            <Link to="/" className="flex items-center gap-2 rounded-md px-1 py-1 transition-colors hover:text-primary">
               <span className="text-xl">Mercado Público</span>
-            </h1>
+            </Link>
 
             <div className="flex gap-1">
               <Link

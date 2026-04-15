@@ -805,45 +805,18 @@ def get_ordenes_compra():
     if cached is not None:
         return jsonify(cached)
 
-    # Use background job for date ranges (multi-day fetch is slow)
-    if date_range and len(date_range) > 1:
-        _cleanup_old_jobs()
-        with _jobs_lock:
-            for jid, job in _jobs.items():
-                if job.get("ck") == ck and job["status"] == "pending":
-                    return jsonify({"status": "pending", "jobId": jid}), 202
-            job_id = str(uuid.uuid4())
-            _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
-        t = threading.Thread(target=_run_oc_job, args=(job_id, params, all_args, ck, date_range), daemon=True)
-        t.start()
-        return jsonify({"status": "pending", "jobId": job_id}), 202
-
-    try:
-        data = _call_mp_api_retry_500_forever("ordenesdecompra.json", params)
-    except requests.Timeout:
-        return jsonify({"error": "La API del Mercado Público tardó demasiado"}), 504
-    except requests.HTTPError as e:
-        code = getattr(e.response, "status_code", 502)
-        if code == 429:
-            return jsonify({"error": "Demasiadas solicitudes simultáneas, intenta de nuevo en unos segundos"}), 429
-        return jsonify({"error": f"Error HTTP {code} de la API"}), 502
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 502
-    except requests.RequestException as e:
-        return jsonify({"error": str(e)}), 502
-
-    raw_list = data if isinstance(data, list) else (data.get("Listado") or [])
-    listado = [normalize_orden_compra(o) for o in raw_list]
-
-    # Enrich region from detail API for items that lack it
-    if ticket:
-        _enrich_regions_oc(listado, ticket)
-
-    listado = _apply_oc_filters_and_sort(listado, all_args)
-
-    output = {"total": len(listado), "listado": listado}
-    cache.set(ck, output)
-    return jsonify(output)
+    # Use background job for all list searches to avoid request timeout on long MP API retries.
+    query_dates = date_range if date_range else [params["fecha"]]
+    _cleanup_old_jobs()
+    with _jobs_lock:
+        for jid, job in _jobs.items():
+            if job.get("ck") == ck and job["status"] == "pending":
+                return jsonify({"status": "pending", "jobId": jid}), 202
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
+    t = threading.Thread(target=_run_oc_job, args=(job_id, params, all_args, ck, query_dates), daemon=True)
+    t.start()
+    return jsonify({"status": "pending", "jobId": job_id}), 202
 
 
 @app.route("/api/licitacion/<codigo>")

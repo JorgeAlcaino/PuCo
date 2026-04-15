@@ -110,14 +110,24 @@ async function fetchLicitaciones(filtros: {
   const resp = await fetch(url, { signal, headers });
 
   if (resp.status === 202) {
-    const { jobId } = await resp.json();
+    const pendingData = await resp.json();
+    const jobId = pendingData?.jobId as string | undefined;
+    if (!jobId) {
+      throw new Error('No se recibió un identificador de job válido. Intenta nuevamente.');
+    }
     onPending?.();
     while (true) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       await new Promise(r => setTimeout(r, 3000));
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const poll = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal, headers });
-      const pollData = await poll.json();
+      const pollData = await poll.json().catch(() => ({} as { error?: string; status?: string; partial?: { total: number; listado: Licitacion[]; progress: number; totalDays: number }; data?: { total: number; listado: Licitacion[] } }));
+      if (!poll.ok) {
+        if (poll.status === 404) {
+          throw new Error('La búsqueda expiró o el servidor se reinició. Vuelve a ejecutar la búsqueda.');
+        }
+        throw new Error((pollData as { error?: string }).error || `Error HTTP ${poll.status} al consultar el estado de la búsqueda`);
+      }
       if (pollData.status === 'done') return pollData.data;
       if (pollData.status === 'error') throw new Error(pollData.error || 'Error del servidor');
       if (pollData.partial) onPartial?.(pollData.partial);

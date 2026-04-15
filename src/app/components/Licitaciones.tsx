@@ -467,7 +467,7 @@ export function Licitaciones() {
           {loadingProgress
             ? <p className="text-muted-foreground">Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}...</p>
             : isSlow
-              ? <p className="text-muted-foreground">La consulta puede tardar hasta 60 segundos, por favor espera...</p>
+              ? <p className="text-muted-foreground">La consulta puede tardar varios minutos si la API está inestable, por favor espera...</p>
               : <p className="text-muted-foreground">Obteniendo licitaciones según tus filtros</p>
           }
         </div>

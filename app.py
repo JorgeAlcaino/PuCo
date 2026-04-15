@@ -386,7 +386,7 @@ _jobs_lock = threading.Lock()
 JOB_FINISHED_TTL_SECONDS = 600
 JOB_PENDING_STALE_SECONDS = 24 * 60 * 60
 HTTP_500_BACKOFF_BASE_SECONDS = 2
-HTTP_500_BACKOFF_MAX_SECONDS = 30
+HTTP_500_BACKOFF_MAX_SECONDS = 60
 
 
 def call_mp_api(endpoint: str, params: dict, retries: int = 2):
@@ -433,7 +433,7 @@ def call_mp_api(endpoint: str, params: dict, retries: int = 2):
 
 
 def _cleanup_old_jobs(now: float | None = None) -> None:
-    """Remove completed jobs quickly and only purge pending jobs when stale for a long time."""
+    """Remove finished jobs quickly and purge pending jobs only when truly stale."""
     current_time = now if now is not None else time.time()
     with _jobs_lock:
         to_delete = []
@@ -484,7 +484,7 @@ def _set_job_error(job_id: str, error_msg: str) -> None:
 
 
 def _call_mp_api_retry_500_forever(endpoint: str, params: dict, job_id: str | None = None):
-    """Retry forever with exponential backoff only when MP API returns HTTP 500."""
+    """Retry indefinitely with backoff only for HTTP 500 responses."""
     delay = HTTP_500_BACKOFF_BASE_SECONDS
     while True:
         try:
@@ -518,14 +518,6 @@ def _iso_to_mp_date(iso_date: str) -> str:
     return iso_date
 
 
-def _get_mp_ticket() -> str:
-    """Read MP ticket from request header first, then fallback to server env var."""
-    header_ticket = request.headers.get("X-MP-Ticket", "").strip()
-    if header_ticket:
-        return header_ticket
-    return os.environ.get("MERCADO_PUBLICO_TICKET", "").strip()
-
-
 def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
     """Return a list of ddmmyyyy strings for each day in [inicio, fin]."""
     if not fecha_inicio_iso or not fecha_fin_iso:
@@ -539,6 +531,19 @@ def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
         start, end = end, start
     days = (end - start).days + 1
     return [(start + timedelta(days=i)).strftime("%d%m%Y") for i in range(days)]
+
+
+def _build_query_dates(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
+    """Build query dates from request filters with no fixed date-range cap."""
+    if fecha_inicio_iso and fecha_fin_iso:
+        date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso)
+        if date_range:
+            return date_range
+    if fecha_inicio_iso:
+        return [_iso_to_mp_date(fecha_inicio_iso)]
+    if fecha_fin_iso:
+        return [_iso_to_mp_date(fecha_fin_iso)]
+    return [_today_mp_date()]
 
 
 # ── API routes ───────────────────────────────────────────────────────────────
@@ -606,9 +611,9 @@ def _run_lic_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_ran
 
 @app.route("/api/licitaciones")
 def get_licitaciones():
-    ticket = _get_mp_ticket()
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
     if not ticket:
-        return jsonify({"error": "API key no configurada. Ingresa tu ticket o define MERCADO_PUBLICO_TICKET en el servidor."}), 401
+        return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
     mp_params = {"ticket": ticket}
     all_args = dict(request.args)
@@ -622,7 +627,7 @@ def get_licitaciones():
         if cached is not None:
             return jsonify(cached)
         try:
-            data = _call_mp_api_retry_500_forever("licitaciones.json", mp_params)
+            data = call_mp_api("licitaciones.json", mp_params)
         except requests.Timeout:
             return jsonify({"error": "La API del Mercado Público tardó demasiado"}), 504
         except requests.HTTPError as e:
@@ -640,13 +645,11 @@ def get_licitaciones():
         cache.set(ck, output)
         return jsonify(output)
 
-    # --- Date-based listing: slow (MP API ~50s), use background job ---
+    # --- Date/list-based listing: always async to tolerate long retries on 500 ---
     fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
     fecha_fin_iso = request.args.get("fechaFin", "").strip()
-    date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso) if fecha_fin_iso else []
-
-    fecha = _iso_to_mp_date(fecha_inicio_iso) if fecha_inicio_iso else _today_mp_date()
-    mp_params["fecha"] = fecha
+    query_dates = _build_query_dates(fecha_inicio_iso, fecha_fin_iso)
+    mp_params["fecha"] = query_dates[0]
 
     estado = request.args.get("estado", "")
     if estado and estado != "Todos":
@@ -669,7 +672,7 @@ def get_licitaciones():
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
 
-    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck, date_range or None), daemon=True)
+    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck, query_dates), daemon=True)
     t.start()
     return jsonify({"status": "pending", "jobId": job_id}), 202
 
@@ -681,6 +684,7 @@ def get_job(job_id: str):
     if job is None:
         return jsonify({"error": "Job no encontrado o expirado"}), 404
     if job["status"] == "pending":
+        _touch_job(job_id)
         partial = job.get("partial")
         if partial:
             return jsonify({"status": "pending", "partial": partial}), 200
@@ -752,9 +756,9 @@ def _run_oc_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_rang
 
 @app.route("/api/ordenes-compra")
 def get_ordenes_compra():
-    ticket = _get_mp_ticket()
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
     if not ticket:
-        return jsonify({"error": "API key no configurada. Ingresa tu ticket o define MERCADO_PUBLICO_TICKET en el servidor."}), 401
+        return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
     # --- Búsqueda por código específico de OC (endpoint singular) ---
     codigo = request.args.get("codigo", "").strip()
@@ -764,7 +768,7 @@ def get_ordenes_compra():
         if cached is not None:
             return jsonify(cached)
         try:
-            data = _call_mp_api_retry_500_forever("ordenesdecompra.json", {"codigo": codigo, "ticket": ticket})
+            data = call_mp_api("ordenesdecompra.json", {"codigo": codigo, "ticket": ticket})
         except requests.Timeout:
             return jsonify({"error": "La API del Mercado Público tardó demasiado"}), 504
         except requests.HTTPError as e:
@@ -789,10 +793,8 @@ def get_ordenes_compra():
 
     fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
     fecha_fin_iso = request.args.get("fechaFin", "").strip()
-    date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso) if fecha_fin_iso else []
-
-    fecha = _iso_to_mp_date(fecha_inicio_iso) if fecha_inicio_iso else _today_mp_date()
-    params["fecha"] = fecha
+    query_dates = _build_query_dates(fecha_inicio_iso, fecha_fin_iso)
+    params["fecha"] = query_dates[0]
 
     estado = request.args.get("estado", "")
     if estado and estado != "Todos":
@@ -805,8 +807,6 @@ def get_ordenes_compra():
     if cached is not None:
         return jsonify(cached)
 
-    # Use background job for all list searches to avoid request timeout on long MP API retries.
-    query_dates = date_range if date_range else [params["fecha"]]
     _cleanup_old_jobs()
     with _jobs_lock:
         for jid, job in _jobs.items():
@@ -814,6 +814,7 @@ def get_ordenes_compra():
                 return jsonify({"status": "pending", "jobId": jid}), 202
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
+
     t = threading.Thread(target=_run_oc_job, args=(job_id, params, all_args, ck, query_dates), daemon=True)
     t.start()
     return jsonify({"status": "pending", "jobId": job_id}), 202
@@ -822,15 +823,15 @@ def get_ordenes_compra():
 @app.route("/api/licitacion/<codigo>")
 def get_licitacion_detail(codigo):
     """Fetch full details for a single licitacion by its code."""
-    ticket = _get_mp_ticket()
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
     if not ticket:
-        return jsonify({"error": "API key no configurada. Ingresa tu ticket o define MERCADO_PUBLICO_TICKET en el servidor."}), 401
+        return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("lic_detail", {"codigo": codigo})
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
     try:
-        data = _call_mp_api_retry_500_forever("licitaciones.json", {"ticket": ticket, "codigo": codigo})
+        data = call_mp_api("licitaciones.json", {"ticket": ticket, "codigo": codigo})
     except requests.Timeout:
         return jsonify({"error": "Timeout"}), 504
     except (requests.HTTPError, RuntimeError, requests.RequestException) as e:
@@ -846,15 +847,15 @@ def get_licitacion_detail(codigo):
 @app.route("/api/orden-compra/<path:codigo>")
 def get_orden_compra_detail(codigo):
     """Fetch full details for a single OC by its code."""
-    ticket = _get_mp_ticket()
+    ticket = request.headers.get("X-MP-Ticket", "").strip()
     if not ticket:
-        return jsonify({"error": "API key no configurada. Ingresa tu ticket o define MERCADO_PUBLICO_TICKET en el servidor."}), 401
+        return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("oc_detail", {"codigo": codigo})
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
     try:
-        data = _call_mp_api_retry_500_forever("ordenesdecompra.json", {"ticket": ticket, "codigo": codigo})
+        data = call_mp_api("ordenesdecompra.json", {"ticket": ticket, "codigo": codigo})
     except requests.Timeout:
         return jsonify({"error": "Timeout"}), 504
     except (requests.HTTPError, RuntimeError, requests.RequestException) as e:

@@ -438,7 +438,7 @@ export function OrdenesCompra() {
           {loadingProgress
             ? <p className="text-muted-foreground">Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}...</p>
             : isSlow
-              ? <p className="text-muted-foreground">La consulta puede tardar hasta 60 segundos por día consultado, por favor espera...</p>
+              ? <p className="text-muted-foreground">La consulta puede tardar varios minutos por día si la API está inestable, por favor espera...</p>
               : <p className="text-muted-foreground">Obteniendo órdenes de compra según tus filtros</p>
           }
         </div>

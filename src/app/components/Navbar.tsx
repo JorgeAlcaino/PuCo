@@ -123,6 +123,7 @@ export function Navbar() {
           <DialogTitle>API key de Mercado Público</DialogTitle>
           <DialogDescription>
             Ingresa tu ticket de acceso a la API de Mercado Público. Se guarda localmente en tu navegador y se envía con cada consulta.{' '}
+            Si el servidor tiene configurada la variable MERCADO_PUBLICO_TICKET, este paso es opcional.{' '}
             <a
               href="https://www.chilecompra.cl/api/"
               target="_blank"

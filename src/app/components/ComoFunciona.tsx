@@ -90,7 +90,8 @@ export function ComoFunciona() {
           Paso 1: Configura tu API Key
         </h2>
         <p className="text-muted-foreground leading-relaxed">
-          Para realizar búsquedas necesitas una <strong>API key (ticket)</strong> del Mercado Público.
+          Para realizar búsquedas necesitas una <strong>API key (ticket)</strong> del Mercado Público,
+          ingresada en tu navegador o configurada como variable de entorno en el servidor.
           Puedes obtener una gratuitamente en el portal de desarrolladores de Mercado Público.
         </p>
         <div className="flex gap-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-sm">
@@ -98,6 +99,7 @@ export function ComoFunciona() {
           <p className="text-muted-foreground">
             Haz clic en el ícono de <strong>llave</strong> en la barra superior para ingresar tu API key.
             Aparecerá un <CheckCircle2 className="w-4 h-4 text-green-500 inline" /> cuando esté configurada correctamente.
+            En Render también puedes usar <strong>MERCADO_PUBLICO_TICKET</strong> para no pedirla a cada usuario.
           </p>
         </div>
       </section>
@@ -126,7 +128,7 @@ export function ComoFunciona() {
               <li><strong>Estado:</strong> Publicada, Adjudicada, Cerrada, Desierta, etc.</li>
               <li><strong>Tipo:</strong> L1, LE, LP, LQ, LR (públicas), E2, CO, B2, H2, I2 (privadas)</li>
               <li><strong>Región:</strong> filtra por la región de la unidad compradora</li>
-              <li><strong>Desde / Hasta:</strong> selecciona un rango de fechas para buscar en múltiples días a la vez (máximo 31 días). Si solo completas "Desde", se busca ese día.</li>
+              <li><strong>Desde / Hasta:</strong> selecciona un rango de fechas para buscar en múltiples días a la vez. Si solo completas "Desde", se busca ese día.</li>
               <li><strong>Solo establecimientos de salud:</strong> filtra para mostrar solo compras del sector salud</li>
             </ul>
           </div>
@@ -160,7 +162,7 @@ export function ComoFunciona() {
               <li><strong>Estado:</strong> Enviada al Proveedor, Aceptada, Cancelada, Recepción Conforme, etc.</li>
               <li><strong>Tipo OC:</strong> SE (Sin emisión automática), CM (Convenio Marco), AG (Compra ágil), TD (Trato directo), CC (Compra coordinada)</li>
               <li><strong>Región:</strong> filtra por la región del organismo comprador</li>
-              <li><strong>Desde / Hasta:</strong> rango de fechas (máximo 31 días). Sin fecha, se usa el día actual.</li>
+              <li><strong>Desde / Hasta:</strong> rango de fechas sin límite fijo. Sin fecha, se usa el día actual.</li>
               <li><strong>Solo establecimientos de salud:</strong> igual que en licitaciones</li>
             </ul>
           </div>

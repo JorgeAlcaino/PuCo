@@ -3,17 +3,21 @@ services:
     name: puco
     runtime: python
     buildCommand: |
-      set -e
-      npm install -g pnpm@10.33.0
-      pnpm install
-      pnpm run build
-      ls -la dist/
+      set -eux
+      python -m pip install --upgrade pip
       pip install -r requirements.txt
+      corepack enable
+      corepack prepare pnpm@10.33.0 --activate
+      pnpm install --frozen-lockfile
+      pnpm run build
+      test -f dist/index.html
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 1 --threads 4
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: FLASK_ENV
         value: production
       - key: NODE_VERSION

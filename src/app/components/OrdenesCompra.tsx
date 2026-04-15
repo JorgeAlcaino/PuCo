@@ -192,10 +192,6 @@ export function OrdenesCompra() {
   const abortRef = useState<AbortController | null>(null);
 
   const handleBuscar = async () => {
-    if (!apiKey) {
-      setError('Debes configurar tu API key de Mercado Público antes de buscar.');
-      return;
-    }
     abortRef[0]?.abort();
     const controller = new AbortController();
     abortRef[1](controller);

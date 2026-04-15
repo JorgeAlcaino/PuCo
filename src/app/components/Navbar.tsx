@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Moon, Sun, FileText, ShoppingCart, KeyRound, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
 import { useTheme } from 'next-themes';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApiKey } from '../context/ApiKeyContext';
 import {
   Dialog,
@@ -21,6 +21,12 @@ export function Navbar() {
   const { apiKey, setApiKey } = useApiKey();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
+
+  useEffect(() => {
+    if (!apiKey) {
+      setDialogOpen(true);
+    }
+  }, [apiKey]);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -122,15 +128,15 @@ export function Navbar() {
         <DialogHeader>
           <DialogTitle>API key de Mercado Público</DialogTitle>
           <DialogDescription>
-            Para usar el buscador debes ingresar tu código API (ticket) de Mercado Público.{' '}
-            Puedes obtenerlo en el portal oficial de API de ChileCompra.{' '}
+              Cada usuario debe ingresar su propio código API (ticket) de Mercado Público para que la app funcione.{' '}
+              Puedes obtenerlo en el portal oficial de API de ChileCompra.{' '}
             <a
               href="https://www.chilecompra.cl/api/"
               target="_blank"
               rel="noopener noreferrer"
               className="underline text-primary"
             >
-              Cómo obtener tu ticket
+                Cómo obtener tu ticket
             </a>
           </DialogDescription>
         </DialogHeader>
@@ -145,9 +151,9 @@ export function Navbar() {
             onKeyDown={e => { if (e.key === 'Enter') handleSave(); }}
             autoComplete="off"
           />
-          {inputValue.trim() === '' && apiKey && (
-            <p className="text-sm text-muted-foreground">Deja vacío para eliminar el ticket guardado.</p>
-          )}
+          <p className="text-sm text-muted-foreground">
+            El ticket se guarda solo en este navegador. Si lo borras, tendrás que volver a ingresarlo.
+          </p>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>

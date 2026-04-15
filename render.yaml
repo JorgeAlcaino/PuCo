@@ -22,5 +22,3 @@ services:
         value: production
       - key: NODE_VERSION
         value: 22.0.0
-      - key: MERCADO_PUBLICO_TICKET
-        sync: false

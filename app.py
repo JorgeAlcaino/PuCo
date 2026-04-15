@@ -519,11 +519,9 @@ def _iso_to_mp_date(iso_date: str) -> str:
 
 
 def _get_mp_ticket() -> str:
-    """Read MP ticket from request header first, then fallback to server env var."""
+    """Read MP ticket from the request header only."""
     header_ticket = request.headers.get("X-MP-Ticket", "").strip()
-    if header_ticket:
-        return header_ticket
-    return os.environ.get("MERCADO_PUBLICO_TICKET", "").strip()
+    return header_ticket
 
 
 def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:

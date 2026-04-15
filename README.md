@@ -46,11 +46,9 @@ Este repo ya incluye [render.yaml](render.yaml) para deploy automatico. El despl
 
 ### Variables de entorno importantes
 
-- MERCADO_PUBLICO_TICKET (opcional, recomendado en produccion)
-  - Si esta definida, el backend la usa automaticamente cuando no llega header X-MP-Ticket desde el navegador.
-  - En Render conviene crearla como Secret/Environment Variable para que la web funcione sin depender del ticket guardado en el navegador del usuario.
 - PYTHON_VERSION (ya definida en render.yaml)
 - NODE_VERSION (ya definida en render.yaml)
+- El ticket se ingresa por usuario desde la navbar y se guarda solo en su navegador.
 
 ### Build y arranque configurados
 
@@ -72,12 +70,12 @@ Este repo ya incluye [render.yaml](render.yaml) para deploy automatico. El despl
 ### Checklist rapido
 
 1. Crear el Blueprint en Render desde este repositorio.
-2. Añadir `MERCADO_PUBLICO_TICKET` como variable secreta si quieres que la web quede lista para usar.
-3. Verificar que el deploy termine y que `/health` responda `200`.
-4. Abrir la URL pública y probar una búsqueda en Licitaciones u Órdenes de Compra.
+2. Verificar que el deploy termine y que `/health` responda `200`.
+3. Abrir la URL pública y configurar la API key desde la navbar.
+4. Probar una búsqueda en Licitaciones u Órdenes de Compra.
 
 ## Notas operativas
 
 - El backend sirve el frontend compilado desde dist/.
-- Si no configuras ticket en el navegador, igual puedes operar con MERCADO_PUBLICO_TICKET en Render.
+- Si no configuras ticket en el navegador, la app no puede consultar la API hasta que cada usuario ingrese su propio ticket.
   

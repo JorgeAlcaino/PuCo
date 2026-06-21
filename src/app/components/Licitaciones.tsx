@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from 'react';
 import { useApiKey } from '../context/ApiKeyContext';
 import { matchesEstablecimiento } from '../data/establecimientos';
-import { Search, Filter, TrendingUp, Calendar, ChevronDown, ChevronUp, FileText, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, DollarSign, Info, Hash, Clock, Users, X } from 'lucide-react';
+import { Search, Filter, TrendingUp, Calendar, ChevronDown, ChevronUp, FileText, Loader2, ExternalLink, Download, AlertCircle, ChevronRight, Building2, MapPin, DollarSign, Info, Hash, Clock, Users, X, Hospital, RefreshCw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import {
   backoffDelayMs,
@@ -24,6 +24,7 @@ const ESTADO_COLORS: Record<string, string> = {
   'Cerrada': '#6b7280',
   'Revocada': '#dc2626',
   'Suspendida': '#9ca3af',
+  'Activas': '#0ea5e9',
 };
 
 const TIPOS_LICITACION = [
@@ -191,6 +192,8 @@ interface LicitacionSearchFilters {
   estado: string;
   tipo: string;
   region: string;
+  codigoOrganismo: string;
+  codigoProveedor: string;
   sortField: string;
   sortOrder: string;
   fechaInicio: string;
@@ -211,6 +214,8 @@ async function fetchLicitaciones(
   if (filtros.estado && filtros.estado !== 'Todos') params.set('estado', filtros.estado);
   if (filtros.tipo) params.set('tipo', filtros.tipo);
   if (filtros.region) params.set('region', filtros.region);
+  if (filtros.codigoOrganismo) params.set('CodigoOrganismo', filtros.codigoOrganismo);
+  if (filtros.codigoProveedor) params.set('CodigoProveedor', filtros.codigoProveedor);
   if (filtros.fechaInicio) params.set('fechaInicio', filtros.fechaInicio);
   if (filtros.fechaFin) params.set('fechaFin', filtros.fechaFin);
   params.set('sortField', filtros.sortField);
@@ -360,6 +365,8 @@ export function Licitaciones() {
   const [estadoFilter, setEstadoFilter] = useState('Todos');
   const [tipoFilter, setTipoFilter] = useState('');
   const [regionFilter, setRegionFilter] = useState('');
+  const [codigoOrganismo, setCodigoOrganismo] = useState('');
+  const [codigoProveedor, setCodigoProveedor] = useState('');
   const [sortField, setSortField] = useState<'fechaCierre' | 'fechaPublicacion'>('fechaCierre');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [showFilters, setShowFilters] = useState(true);
@@ -389,7 +396,7 @@ export function Licitaciones() {
   const autoRetryCountRef = useRef(0);
   const lastStableResultsRef = useRef<Licitacion[]>([]);
 
-  const estados = ['Todos', 'Publicada', 'Adjudicada', 'Cerrada', 'Desierta', 'Revocada', 'Suspendida'];
+  const estados = ['Todos', 'Activas', 'Publicada', 'Adjudicada', 'Cerrada', 'Desierta', 'Revocada', 'Suspendida'];
 
   const persistSnapshot = useCallback((filters: LicitacionSearchFilters, list: Licitacion[], warningMessage?: string) => {
     saveSearchSnapshot<LicitacionSearchFilters, Licitacion>(LICITACIONES_STORAGE_KEY, {
@@ -409,6 +416,8 @@ export function Licitaciones() {
     setEstadoFilter(snapshot.filters.estado || 'Todos');
     setTipoFilter(snapshot.filters.tipo || '');
     setRegionFilter(snapshot.filters.region || '');
+    setCodigoOrganismo(snapshot.filters.codigoOrganismo || '');
+    setCodigoProveedor(snapshot.filters.codigoProveedor || '');
     setSortField((snapshot.filters.sortField as 'fechaCierre' | 'fechaPublicacion') || 'fechaCierre');
     setSortOrder((snapshot.filters.sortOrder as 'asc' | 'desc') || 'desc');
     setFechaInicio(snapshot.filters.fechaInicio || '');
@@ -461,6 +470,8 @@ export function Licitaciones() {
       estado: estadoFilter,
       tipo: tipoFilter,
       region: regionFilter,
+      codigoOrganismo,
+      codigoProveedor,
       sortField,
       sortOrder,
       fechaInicio,
@@ -468,19 +479,13 @@ export function Licitaciones() {
       soloEstablecimientos,
     };
 
-    const filterEstab = (list: Licitacion[]) =>
-      soloEstablecimientos
-        ? list.filter(l => matchesEstablecimiento(l.nombre) || (l.organismo ? matchesEstablecimiento(l.organismo) : false))
-        : list;
-
     const applyAndPersist = (list: Licitacion[], warningMessage?: string) => {
-      const filtered = filterEstab(list);
-      setLicitaciones(filtered);
-      if (filtered.length > 0) {
-        lastStableResultsRef.current = filtered;
-        persistSnapshot(searchFilters, filtered, warningMessage);
+      setLicitaciones(list);
+      if (list.length > 0) {
+        lastStableResultsRef.current = list;
+        persistSnapshot(searchFilters, list, warningMessage);
       }
-      return filtered;
+      return list;
     };
 
     try {
@@ -553,10 +558,20 @@ export function Licitaciones() {
   }, [expandedCodigo, apiKey]);
 
   const licitacionesFiltradas = useMemo(() => {
+    let list = licitaciones;
+    if (soloEstablecimientos) {
+      list = list.filter(l => matchesEstablecimiento(l.nombre) || (l.organismo ? matchesEstablecimiento(l.organismo) : false));
+    }
+    if (regionFilter) {
+      list = list.filter(l => {
+        const canonicalItemRegion = normalizeRegionName(l.region);
+        return !canonicalItemRegion || canonicalItemRegion === regionFilter;
+      });
+    }
     const q = normalizeSearchText(filtroResultados.trim());
-    if (!q) return licitaciones;
+    if (!q) return list;
 
-    return licitaciones.filter(lic =>
+    return list.filter(lic =>
       normalizeSearchText([
         lic.nombre,
         lic.codigo,
@@ -566,7 +581,7 @@ export function Licitaciones() {
         lic.tipoDescripcion,
       ].filter(Boolean).join(' ')).includes(q)
     );
-  }, [licitaciones, filtroResultados]);
+  }, [licitaciones, filtroResultados, soloEstablecimientos, regionFilter]);
 
   const estadoStats = useMemo(() => {
     const stats: Record<string, number> = {};
@@ -638,135 +653,219 @@ export function Licitaciones() {
     'B2': '#ec4899', 'H2': '#14b8a6', 'I2': '#a855f7',
   };
 
+  const [showAnalytics, setShowAnalytics] = useState(false);
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1>Licitaciones</h1>
-          <p className="text-muted-foreground mt-1">
-            Consulta licitaciones del Mercado Público en tiempo real
-          </p>
-        </div>
-        {licitacionesFiltradas.length > 0 && (
-          <button
-            onClick={() => exportCSV(licitacionesFiltradas)}
-            className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
-          >
-            <Download className="w-4 h-4" />
-            Exportar CSV
-          </button>
-        )}
-      </div>
 
-      {/* Búsqueda y filtros */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <div className="space-y-4">
-          <div className="flex gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Buscar por nombre o código..."
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleBuscar()}
-                className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-              />
+      {/* ── Hero Header ──────────────────────────────────────────────────── */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-indigo-600/10 via-card to-blue-600/10 px-6 py-6">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-indigo-500/10 blur-3xl" />
+        <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <FileText className="h-5 w-5 text-indigo-500" />
+              <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">Mercado Público · Licitaciones</span>
             </div>
+            <h1 className="text-2xl font-bold">Licitaciones</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Consulta licitaciones del Mercado Público en tiempo real
+            </p>
+          </div>
+          <div className="flex gap-3 flex-wrap">
+            {licitacionesFiltradas.length > 0 && (
+              <button
+                id="lic-export-btn"
+                onClick={() => exportCSV(licitacionesFiltradas)}
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm hover:bg-accent transition-colors"
+              >
+                <Download className="h-4 w-4" /> Exportar CSV
+              </button>
+            )}
             <button
-              onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
-            >
-              <Filter className="w-4 h-4" />
-              Filtros
-              {showFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </button>
-            <button
+              id="lic-refresh-btn"
               onClick={handleBuscar}
               disabled={isLoading}
-              className="flex items-center gap-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm hover:bg-accent transition-colors disabled:opacity-50"
             >
-              {isLoading ? <><Loader2 className="w-4 h-4 animate-spin" />Consultando...</> : <><Search className="w-4 h-4" />Buscar</>}
+              <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /> Actualizar
+            </button>
+            {hasSearched && licitacionesFiltradas.length > 0 && (
+              <button
+                id="lic-analytics-toggle"
+                onClick={() => setShowAnalytics(v => !v)}
+                className="flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 dark:border-indigo-700 px-3 py-2 text-sm text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
+              >
+                <TrendingUp className="h-4 w-4" />
+                {showAnalytics ? 'Ocultar análisis' : 'Ver análisis'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Search Form ───────────────────────────────────────────────────── */}
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+
+          {/* Keyword search */}
+          <div className="relative lg:col-span-2">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              id="lic-search-query"
+              type="text"
+              placeholder="Buscar por nombre, código, organismo…"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleBuscar()}
+              className="w-full rounded-lg border border-border bg-background pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+            />
+          </div>
+
+          {/* Estado */}
+          <select
+            id="lic-filter-estado"
+            value={estadoFilter}
+            onChange={(e) => setEstadoFilter(e.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          >
+            {estados.map(e => <option key={e} value={e}>{e}</option>)}
+          </select>
+
+          {/* Tipo */}
+          <select
+            id="lic-filter-tipo"
+            value={tipoFilter}
+            onChange={(e) => setTipoFilter(e.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          >
+            {TIPOS_LICITACION.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+
+          {/* Región */}
+          <select
+            id="lic-filter-region"
+            value={regionFilter}
+            onChange={(e) => setRegionFilter(e.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          >
+            {REGIONES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+
+          {/* Código organismo */}
+          <input
+            id="lic-filter-organismo"
+            type="text"
+            placeholder="Código organismo (ej: 6945)"
+            value={codigoOrganismo}
+            onChange={(e) => setCodigoOrganismo(e.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          />
+
+          {/* Código proveedor */}
+          <input
+            id="lic-filter-proveedor"
+            type="text"
+            placeholder="Código proveedor (ej: 17793)"
+            value={codigoProveedor}
+            onChange={(e) => setCodigoProveedor(e.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          />
+
+          {/* Fecha desde */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground flex items-center gap-1"><Calendar className="h-3 w-3" /> Desde</label>
+            <input
+              id="lic-filter-desde"
+              type="date"
+              value={fechaInicio}
+              onChange={(e) => setFechaInicio(e.target.value)}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+            />
+          </div>
+
+          {/* Fecha hasta */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground flex items-center gap-1"><Calendar className="h-3 w-3" /> Hasta</label>
+            <input
+              id="lic-filter-hasta"
+              type="date"
+              value={fechaFin}
+              onChange={(e) => setFechaFin(e.target.value)}
+              min={fechaInicio || undefined}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+            />
+          </div>
+
+          {/* Sort */}
+          <select
+            id="lic-filter-sort"
+            value={sortField}
+            onChange={(e) => setSortField(e.target.value as 'fechaCierre' | 'fechaPublicacion')}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          >
+            <option value="fechaCierre">Ordenar: Fecha Cierre</option>
+            <option value="fechaPublicacion">Ordenar: Fecha Publicación</option>
+          </select>
+
+          {/* Sort order */}
+          <select
+            id="lic-filter-order"
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          >
+            <option value="desc">Descendente</option>
+            <option value="asc">Ascendente</option>
+          </select>
+
+          {/* Solo establecimientos pill */}
+          <div className="lg:col-span-2 flex items-center gap-3">
+            <button
+              id="lic-filter-establecimientos"
+              type="button"
+              onClick={() => setSoloEstablecimientos(v => !v)}
+              className={`flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium border transition-colors ${
+                soloEstablecimientos
+                  ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-700'
+                  : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+              }`}
+            >
+              <Hospital className="h-4 w-4" />
+              Solo establecimientos salud
             </button>
           </div>
 
-          {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-border">
-              <div>
-                <label className="block text-sm mb-2">Estado</label>
-                <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  {estados.map(e => <option key={e} value={e}>{e}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Tipo</label>
-                <select value={tipoFilter} onChange={(e) => setTipoFilter(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  {TIPOS_LICITACION.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Región</label>
-                <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  {REGIONES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Desde</label>
-                <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Hasta</label>
-                <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
-                  min={fechaInicio || undefined}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring" />
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Ordenar por</label>
-                <select value={sortField} onChange={(e) => setSortField(e.target.value as 'fechaCierre' | 'fechaPublicacion')}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="fechaCierre">Fecha Cierre</option>
-                  <option value="fechaPublicacion">Fecha Publicación</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm mb-2">Orden</label>
-                <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
-                  className="w-full px-3 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring">
-                  <option value="desc">Descendente</option>
-                  <option value="asc">Ascendente</option>
-                </select>
-              </div>
-              <div className="flex items-center md:col-span-3">
-                <label className="flex items-center gap-3 cursor-pointer select-none group">
-                  <div className="relative">
-                    <input
-                      type="checkbox"
-                      checked={soloEstablecimientos}
-                      onChange={(e) => setSoloEstablecimientos(e.target.checked)}
-                      className="sr-only"
-                    />
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${soloEstablecimientos ? 'bg-primary border-primary' : 'border-border bg-input-background group-hover:border-primary/60'}`}>
-                      {soloEstablecimientos && (
-                        <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-sm font-medium">
-                    Solo establecimientos de salud
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    — filtra resultados por el directorio de establecimientos de salud públicos
-                  </span>
-                </label>
-              </div>
-            </div>
-          )}
+          {/* Actions */}
+          <div className="flex gap-2 items-end lg:col-span-2">
+            <button
+              id="lic-search-btn"
+              onClick={handleBuscar}
+              disabled={isLoading}
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 transition-colors"
+            >
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              {isLoading ? 'Consultando…' : 'Buscar'}
+            </button>
+            <button
+              id="lic-clear-btn"
+              onClick={() => {
+                setBusqueda('');
+                setEstadoFilter('Todos');
+                setTipoFilter('');
+                setRegionFilter('');
+                setCodigoOrganismo('');
+                setCodigoProveedor('');
+                setFechaInicio('');
+                setFechaFin('');
+                setSoloEstablecimientos(false);
+              }}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-accent transition-colors"
+              title="Limpiar filtros"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -815,225 +914,128 @@ export function Licitaciones() {
         <>
           {/* Banner de carga progresiva */}
           {isLoading && loadingProgress && (
-            <div className="flex items-center gap-3 p-3 mb-4 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm">
-              <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
+            <div className="flex items-center gap-3 p-3 mb-4 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-sm">
+              <Loader2 className="w-4 h-4 text-indigo-500 animate-spin shrink-0" />
               <span>Cargando día {loadingProgress.progress} de {loadingProgress.totalDays}... Mostrando {licitaciones.length} resultados parciales. Puedes navegar mientras tanto.</span>
             </div>
           )}
+
           {/* Estadísticas */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-card border border-border rounded-lg p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-blue-500/10 rounded-lg"><FileText className="w-5 h-5 text-blue-500" /></div>
-                <div><p className="text-sm text-muted-foreground">Total Licitaciones</p><p className="text-2xl">{licitaciones.length}</p></div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: soloEstablecimientos ? 'Establecimientos salud' : 'Total Licitaciones', value: licitacionesFiltradas.length.toLocaleString('es-CL'), icon: soloEstablecimientos ? Hospital : FileText, color: soloEstablecimientos ? 'text-red-500' : 'text-indigo-500' },
+              { label: 'Tipos distintos', value: tipoStats.length.toLocaleString('es-CL'), icon: Hash, color: 'text-green-500' },
+              { label: 'Estados distintos', value: estadoStats.length.toLocaleString('es-CL'), icon: TrendingUp, color: 'text-orange-500' },
+              { label: 'Detalle de licitación', value: 'Haz clic para ver', icon: Info, color: 'text-purple-500' },
+            ].map(({ label, value, icon: Icon, color }) => (
+              <div key={label} className="rounded-xl border border-border bg-card p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon className={`h-4 w-4 ${color}`} />
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                </div>
+                <p className="font-bold text-lg leading-tight">{value}</p>
               </div>
-            </div>
-            <div className="bg-card border border-border rounded-lg p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-green-500/10 rounded-lg"><Hash className="w-5 h-5 text-green-500" /></div>
-                <div><p className="text-sm text-muted-foreground">Tipos Distintos</p><p className="text-2xl">{tipoStats.length}</p></div>
-              </div>
-            </div>
-            <div className="bg-card border border-border rounded-lg p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-orange-500/10 rounded-lg"><TrendingUp className="w-5 h-5 text-orange-500" /></div>
-                <div><p className="text-sm text-muted-foreground">Estados Distintos</p><p className="text-2xl">{estadoStats.length}</p></div>
-              </div>
-            </div>
-            <div className="bg-card border border-border rounded-lg p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-purple-500/10 rounded-lg"><Info className="w-5 h-5 text-purple-500" /></div>
-                <div><p className="text-sm text-muted-foreground">Haz clic en una fila</p><p className="text-sm">para ver detalle completo</p></div>
-              </div>
-            </div>
+            ))}
           </div>
+
+          {/* Analytics collapsible panel */}
+          {showAnalytics && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="rounded-xl border border-border bg-card p-4">
+                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-indigo-500" /> Distribución por Estado</h3>
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={estadoStats} cx="50%" cy="50%" labelLine={false}
+                      label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      outerRadius={70} dataKey="value">
+                      {estadoStats.map(e => <Cell key={e.name} fill={ESTADO_COLORS[e.name] ?? '#8884d8'} />)}
+                    </Pie>
+                    <Tooltip formatter={(v: number) => [v, 'Licitaciones']} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Hash className="h-4 w-4 text-green-500" /> Distribución por Tipo</h3>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={tipoStats}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="name" stroke="var(--muted-foreground)" tick={{ fontSize: 9 }} />
+                    <YAxis stroke="var(--muted-foreground)" />
+                    <Tooltip contentStyle={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.5rem' }} />
+                    <Bar dataKey="count" radius={[8, 8, 0, 0]}>
+                      {tipoStats.map(t => <Cell key={`${t.name}-${t.code || 'na'}`} fill={TIPO_COLORS[t.code] ?? '#8884d8'} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* Banner de establecimientos */}
+          {soloEstablecimientos && (
+            <div className="flex items-center gap-3 rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 px-4 py-2.5 text-sm text-red-700 dark:text-red-300">
+              <Hospital className="h-4 w-4 flex-shrink-0" />
+              <span>Filtrando por establecimientos de salud: <strong>{licitacionesFiltradas.length}</strong> de {licitaciones.length} resultados coinciden con el directorio de establecimientos públicos de salud.</span>
+            </div>
+          )}
 
           {licitacionesFiltradas.length > 0 ? (
             <>
-              {/* Gráficos */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-card border border-border rounded-lg p-6">
-                  <h3 className="mb-4">Distribución por Estado</h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <PieChart>
-                      <Pie data={estadoStats} cx="50%" cy="50%" labelLine={false}
-                        label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                        outerRadius={80} dataKey="value">
-                        {estadoStats.map(e => <Cell key={e.name} fill={ESTADO_COLORS[e.name] ?? '#8884d8'} />)}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="bg-card border border-border rounded-lg p-6">
-                  <h3 className="mb-4">Distribución por Tipo</h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={tipoStats}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="name" stroke="var(--muted-foreground)" />
-                      <YAxis stroke="var(--muted-foreground)" />
-                      <Tooltip contentStyle={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.5rem' }} />
-                      <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                        {tipoStats.map(t => <Cell key={`${t.name}-${t.code || 'na'}`} fill={TIPO_COLORS[t.code] ?? '#8884d8'} />)}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+              {/* List of licitaciones */}
+              <div className="space-y-2">
+                {paginated.map(lic => (
+                  <article
+                    key={lic.codigo}
+                    id={`lic-item-${lic.codigo}`}
+                    className="rounded-xl border border-border bg-card p-4 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-sm cursor-pointer transition-all"
+                    onClick={() => toggleDetail(lic.codigo)}
+                  >
+                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs text-muted-foreground border border-border rounded px-1.5 py-0.5">{lic.codigo}</span>
+                          <span
+                            className="text-xs font-medium px-2 py-0.5 rounded-full text-white"
+                            style={{ backgroundColor: ESTADO_COLORS[lic.estado] ?? '#6b7280' }}
+                          >
+                            {lic.estado}
+                          </span>
+                          <span
+                            className="text-xs font-medium px-2 py-0.5 rounded"
+                            style={{ backgroundColor: `${TIPO_COLORS[lic.tipo] ?? '#6b7280'}20`, color: TIPO_COLORS[lic.tipo] ?? '#6b7280' }}
+                          >
+                            {getLicitacionTipoLabel(lic.tipo, lic.tipoDescripcion)}
+                          </span>
+                        </div>
+                        <p className="font-medium text-sm leading-snug line-clamp-2">{lic.nombre}</p>
+                        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1"><Building2 className="h-3 w-3" />{lic.organismo || 'Organismo no especificado'}</span>
+                          {lic.region && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{normalizeRegionName(lic.region)}</span>}
+                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />Cierre: {formatDate(lic.fechaCierre)}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-row md:flex-col items-center md:items-end gap-3 md:gap-1 flex-shrink-0">
+                        {lic.monto > 0 && (
+                          <div className="text-right">
+                            <p className="text-xs text-muted-foreground">Monto estimado</p>
+                            <p className="font-bold text-base text-green-600 dark:text-green-400">{formatCurrency(lic.monto)}</p>
+                          </div>
+                        )}
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                    </div>
+                  </article>
+                ))}
               </div>
 
-              {/* Tabla */}
-              <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-muted/50 border-b border-border">
-                      <tr>
-                        <th className="px-4 py-3 w-8"></th>
-                        <th className="px-4 py-3 text-left">Código</th>
-                        <th className="px-4 py-3 text-left">Nombre</th>
-                        <th className="px-4 py-3 text-left">Estado</th>
-                        <th className="px-4 py-3 text-left">Tipo</th>
-                        <th className="px-4 py-3 text-left">Región</th>
-                        <th className="px-4 py-3 text-left">Cierre</th>
-                        <th className="px-4 py-3 text-center">Ver</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {paginated.map(lic => (
-                        <Fragment key={lic.codigo}>
-                          <tr onClick={() => toggleDetail(lic.codigo)}
-                            className="hover:bg-muted/30 transition-colors cursor-pointer">
-                            <td className="px-4 py-4">
-                              <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${expandedCodigo === lic.codigo ? 'rotate-90' : ''}`} />
-                            </td>
-                            <td className="px-4 py-4"><span className="font-mono text-sm">{lic.codigo}</span></td>
-                            <td className="px-4 py-4 max-w-sm"><p className="line-clamp-2 text-sm">{lic.nombre}</p></td>
-                            <td className="px-4 py-4">
-                              <span className="px-3 py-1 rounded-full text-sm text-white"
-                                style={{ backgroundColor: ESTADO_COLORS[lic.estado] ?? '#6b7280' }}>
-                                {lic.estado}
-                              </span>
-                            </td>
-                            <td className="px-4 py-4">
-                              <span className="text-sm px-2 py-1 rounded text-white"
-                                style={{ backgroundColor: TIPO_COLORS[lic.tipo] ?? '#6b7280' }}>
-                                {getLicitacionTipoLabel(lic.tipo, lic.tipoDescripcion)}
-                              </span>
-                            </td>
-                            <td className="px-4 py-4">
-                              <span className="text-sm text-muted-foreground">{normalizeRegionName(lic.region) || '—'}</span>
-                            </td>
-                            <td className="px-4 py-4">
-                              <div className="flex items-center gap-2">
-                                <Calendar className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm">{formatDate(lic.fechaCierre)}</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-4 text-center">
-                              <a href={lic.urlDetalle} target="_blank" rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="inline-flex items-center gap-1 text-primary hover:underline text-sm">
-                                <ExternalLink className="w-4 h-4" />
-                              </a>
-                            </td>
-                          </tr>
-                          {expandedCodigo === lic.codigo && (
-                            <tr key={`${lic.codigo}-detail`}>
-                              <td colSpan={8} className="p-0">
-                                <div className="bg-muted/20 border-t border-border p-6">
-                                  {detailLoading && (
-                                    <div className="flex items-center gap-3 text-muted-foreground">
-                                      <Loader2 className="w-5 h-5 animate-spin" />
-                                      <span>Cargando detalle completo...</span>
-                                    </div>
-                                  )}
-                                  {detailError && (
-                                    <div className="flex items-center gap-3 text-destructive">
-                                      <AlertCircle className="w-5 h-5" />
-                                      <span>{detailError}</span>
-                                    </div>
-                                  )}
-                                  {detailData && detailData.codigo === lic.codigo && (
-                                    <div className="space-y-4">
-                                      <div className="flex items-center justify-between">
-                                        <h4 className="font-semibold">Detalle Completo</h4>
-                                        <button onClick={(e) => { e.stopPropagation(); setExpandedCodigo(null); }}
-                                          className="p-1 hover:bg-muted rounded">
-                                          <X className="w-4 h-4" />
-                                        </button>
-                                      </div>
-                                      {detailData.descripcion && (
-                                        <p className="text-sm text-muted-foreground">{detailData.descripcion}</p>
-                                      )}
-                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><Building2 className="w-4 h-4" /> Organismo</h5>
-                                          <div className="text-sm space-y-1">
-                                            <p><span className="text-muted-foreground">Nombre:</span> {detailData.organismo || '—'}</p>
-                                            <p><span className="text-muted-foreground">Unidad:</span> {detailData.nombreUnidad || '—'}</p>
-                                            <p><span className="text-muted-foreground">RUT:</span> {detailData.rutUnidad || '—'}</p>
-                                            <p><span className="text-muted-foreground">Código:</span> {detailData.codigoOrganismo || '—'}</p>
-                                          </div>
-                                        </div>
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><DollarSign className="w-4 h-4" /> Financiero</h5>
-                                          <div className="text-sm space-y-1">
-                                            <p><span className="text-muted-foreground">Monto:</span> {detailData.monto && detailData.monto > 0 ? formatCurrency(detailData.monto) : 'No publicado'}</p>
-                                            <p><span className="text-muted-foreground">Moneda:</span> {detailData.moneda || '—'}</p>
-                                            <p><span className="text-muted-foreground">Tipo:</span> {getLicitacionTipoLabel(detailData.tipo, detailData.tipoDescripcion)}</p>
-                                            <p><span className="text-muted-foreground">Convocatoria:</span> {detailData.tipoConvocatoria || '—'}</p>
-                                          </div>
-                                        </div>
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><MapPin className="w-4 h-4" /> Ubicación</h5>
-                                          <div className="text-sm space-y-1">
-                                            <p><span className="text-muted-foreground">Región:</span> {normalizeRegionName(detailData.region) || '—'}</p>
-                                            <p><span className="text-muted-foreground">Comuna:</span> {detailData.comunaUnidad || '—'}</p>
-                                          </div>
-                                        </div>
-                                      </div>
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><Clock className="w-4 h-4" /> Fechas</h5>
-                                          <div className="text-sm grid grid-cols-2 gap-1">
-                                            <span className="text-muted-foreground">Creación:</span><span>{formatDate(detailData.fechaCreacion)}</span>
-                                            <span className="text-muted-foreground">Publicación:</span><span>{formatDate(detailData.fechaPublicacion)}</span>
-                                            <span className="text-muted-foreground">Cierre:</span><span>{formatDate(detailData.fechaCierre)}</span>
-                                            <span className="text-muted-foreground">Adjudicación:</span><span>{formatDate(detailData.fechaAdjudicacion)}</span>
-                                            <span className="text-muted-foreground">Fecha estimada de adjudicación:</span><span>{formatDate(detailData.fechaEstimadaAdjudicacion)}</span>
-                                          </div>
-                                        </div>
-                                        <div className="space-y-3">
-                                          <h5 className="text-sm font-medium flex items-center gap-2"><Users className="w-4 h-4" /> Participación</h5>
-                                          <div className="text-sm grid grid-cols-2 gap-1">
-                                            <span className="text-muted-foreground">Etapas:</span><span>{detailData.etapas ?? '—'}</span>
-                                            <span className="text-muted-foreground">Items:</span><span>{detailData.cantidadItems ?? '—'}</span>
-                                            <span className="text-muted-foreground">Reclamos:</span><span>{detailData.cantidadReclamos ?? '—'}</span>
-                                            <span className="text-muted-foreground">Oferentes:</span><span>{detailData.adjudicacionNumeroOferentes ?? '—'}</span>
-                                            <span className="text-muted-foreground">Días al cierre:</span><span>{detailData.diasCierreLicitacion ?? '—'}</span>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Paginación */}
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-card border border-border rounded-lg px-4 py-3">
+              {/* Modern Pagination */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-card border border-border rounded-xl px-4 py-3">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <span>Mostrar</span>
                   <select
                     value={pageSize}
                     onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                    className="border border-border rounded px-2 py-1 bg-background text-foreground text-sm"
+                    className="rounded-lg border border-border px-2 py-1 bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
                   >
                     {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
@@ -1043,12 +1045,12 @@ export function Licitaciones() {
                   <button
                     onClick={() => setCurrentPage(1)}
                     disabled={currentPage === 1}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+                    className="px-2.5 py-1.5 rounded-lg text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
                   >«</button>
                   <button
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                     disabled={currentPage === 1}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+                    className="px-2.5 py-1.5 rounded-lg text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
                   >‹</button>
                   {Array.from({ length: totalPages }, (_, i) => i + 1)
                     .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
@@ -1063,9 +1065,9 @@ export function Licitaciones() {
                         : <button
                             key={p}
                             onClick={() => setCurrentPage(p as number)}
-                            className={`px-3 py-1 rounded text-sm border transition-colors ${
+                            className={`px-3 py-1 rounded-lg text-sm border transition-colors ${
                               currentPage === p
-                                ? 'bg-primary text-primary-foreground border-primary'
+                                ? 'bg-indigo-600 text-white border-indigo-600 font-medium'
                                 : 'border-border hover:bg-muted'
                             }`}
                           >{p}</button>
@@ -1074,51 +1076,52 @@ export function Licitaciones() {
                   <button
                     onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                     disabled={currentPage === totalPages}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+                    className="px-2.5 py-1.5 rounded-lg text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
                   >›</button>
                   <button
                     onClick={() => setCurrentPage(totalPages)}
                     disabled={currentPage === totalPages}
-                    className="px-2 py-1 rounded text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
+                    className="px-2.5 py-1.5 rounded-lg text-sm border border-border disabled:opacity-40 hover:bg-muted transition-colors"
                   >»</button>
                 </div>
               </div>
 
-              <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+              {/* Result Filter */}
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Search className="w-4 h-4 text-muted-foreground" />
                   Filtrar resultados cargados
                 </div>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <input
                     type="text"
                     value={filtroResultados}
                     onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
                     placeholder="Buscar dentro de los resultados ya obtenidos..."
-                    className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full pl-9 pr-4 py-2 bg-background rounded-lg border border-border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">Este filtro solo actúa sobre la lista ya cargada.</p>
               </div>
             </>
           ) : (
-            <div className="text-center py-16 bg-card border border-border rounded-lg space-y-4">
+            <div className="text-center py-16 bg-card border border-border rounded-xl space-y-4">
               <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
               <div>
-                <h3 className="mb-2">No hay coincidencias con el filtro adicional</h3>
+                <h3 className="text-lg font-semibold mb-2">No hay coincidencias con el filtro adicional</h3>
                 <p className="text-muted-foreground">La búsqueda principal ya cargó resultados, pero este filtro no encontró coincidencias.</p>
               </div>
-              <div className="bg-muted/40 border border-border rounded-lg p-4 text-left space-y-2">
+              <div className="bg-muted/40 border border-border rounded-xl p-4 text-left space-y-2 max-w-md mx-auto">
                 <label className="block text-sm font-medium">Filtrar resultados cargados</label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <input
                     type="text"
                     value={filtroResultados}
                     onChange={(e) => { setFiltroResultados(e.target.value); setCurrentPage(1); }}
                     placeholder="Buscar dentro de los resultados ya obtenidos..."
-                    className="w-full pl-10 pr-4 py-2 bg-input-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full pl-9 pr-4 py-2 bg-background rounded-lg border border-border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">Borra este texto para volver a ver la lista completa.</p>
@@ -1129,10 +1132,161 @@ export function Licitaciones() {
       )}
 
       {hasSearched && !isLoading && !error && licitaciones.length === 0 && (
-        <div className="text-center py-16 bg-card border border-border rounded-lg">
-          <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-          <h3 className="mb-2">No se encontraron licitaciones</h3>
+        <div className="text-center py-16 bg-card border border-border rounded-xl">
+          <FileText className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-40" />
+          <h3 className="text-lg font-semibold mb-2">No se encontraron licitaciones</h3>
           <p className="text-muted-foreground">Intenta ajustar los filtros de búsqueda</p>
+        </div>
+      )}
+
+      {/* ── Detail Drawer ─────────────────────────────────────────────────── */}
+      {expandedCodigo && (
+        <div className="fixed inset-0 z-50 overflow-hidden" aria-labelledby="slide-over-title" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 overflow-hidden">
+            {/* Backdrop */}
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setExpandedCodigo(null)} />
+
+            <div className="pointer-events-none fixed inset-y-0 right-0 flex max-w-full pl-10 sm:pl-16">
+              <div className="pointer-events-auto w-screen max-w-2xl border-l border-border bg-card shadow-2xl transition-all">
+                <div className="flex h-full flex-col overflow-y-auto">
+                  {/* Drawer Header */}
+                  <div className="border-b border-border px-6 py-5 bg-muted/20">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-mono text-xs text-muted-foreground border border-border rounded px-2 py-0.5 bg-background">
+                          {expandedCodigo}
+                        </span>
+                        <h2 className="text-lg font-bold mt-2" id="slide-over-title">Detalle de Licitación</h2>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedCodigo(null)}
+                        className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                      >
+                        <X className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Drawer Content */}
+                  <div className="relative flex-1 p-6 space-y-6">
+                    {detailLoading && (
+                      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground space-y-3">
+                        <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+                        <span className="text-sm">Cargando información detallada...</span>
+                      </div>
+                    )}
+
+                    {detailError && (
+                      <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-destructive flex items-start gap-3">
+                        <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-medium">Error al cargar detalle</p>
+                          <p className="text-sm opacity-80">{detailError}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {detailData && !detailLoading && (
+                      <div className="space-y-6">
+                        {/* Title and description */}
+                        <div>
+                          <h3 className="text-base font-semibold mb-2">{detailData.nombre}</h3>
+                          {detailData.descripcion && (
+                            <p className="text-sm text-muted-foreground bg-muted/30 rounded-xl p-4 border border-border leading-relaxed">
+                              {detailData.descripcion}
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Grid info */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Organismo */}
+                          <div className="rounded-xl border border-border p-4 space-y-3">
+                            <h4 className="text-sm font-semibold flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
+                              <Building2 className="h-4 w-4" /> Organismo Comprador
+                            </h4>
+                            <div className="text-sm space-y-1.5">
+                              <p><span className="text-muted-foreground">Nombre:</span> <strong className="font-medium">{detailData.organismo || '—'}</strong></p>
+                              <p><span className="text-muted-foreground">Unidad:</span> {detailData.nombreUnidad || '—'}</p>
+                              <p><span className="text-muted-foreground">RUT:</span> {detailData.rutUnidad || '—'}</p>
+                              <p><span className="text-muted-foreground">Código:</span> {detailData.codigoOrganismo || '—'}</p>
+                            </div>
+                          </div>
+
+                          {/* Finanzas */}
+                          <div className="rounded-xl border border-border p-4 space-y-3">
+                            <h4 className="text-sm font-semibold flex items-center gap-2 text-green-600 dark:text-green-400">
+                              <DollarSign className="h-4 w-4" /> Información Financiera
+                            </h4>
+                            <div className="text-sm space-y-1.5">
+                              <p>
+                                <span className="text-muted-foreground">Presupuesto Estimado:</span>{' '}
+                                <strong className="font-semibold text-green-600 dark:text-green-400">
+                                  {detailData.monto && detailData.monto > 0 ? formatCurrency(detailData.monto) : 'No publicado'}
+                                </strong>
+                              </p>
+                              <p><span className="text-muted-foreground">Moneda:</span> {detailData.moneda || '—'}</p>
+                              <p><span className="text-muted-foreground">Tipo de Convocatoria:</span> {detailData.tipoConvocatoria || '—'}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Fechas */}
+                        <div className="rounded-xl border border-border bg-muted/20 p-4">
+                          <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                            <Clock className="h-4 w-4 text-indigo-500" /> Fechas Hito
+                          </h4>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
+                            {[
+                              { label: 'Creación', value: formatDate(detailData.fechaCreacion) },
+                              { label: 'Publicación', value: formatDate(detailData.fechaPublicacion) },
+                              { label: 'Cierre de ofertas', value: formatDate(detailData.fechaCierre) },
+                              { label: 'Adjudicación', value: formatDate(detailData.fechaAdjudicacion) },
+                              { label: 'Est. Adjudicación', value: formatDate(detailData.fechaEstimadaAdjudicacion) },
+                            ].map(({ label, value }) => (
+                              <div key={label} className="border-b border-border/50 pb-1">
+                                <p className="text-xs text-muted-foreground">{label}</p>
+                                <p className="font-medium text-foreground">{value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Participación / Otros */}
+                        <div className="rounded-xl border border-border p-4 space-y-3">
+                          <h4 className="text-sm font-semibold flex items-center gap-2 text-violet-600 dark:text-violet-400">
+                            <Users className="h-4 w-4" /> Participación y Estructura
+                          </h4>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div><p className="text-muted-foreground text-xs">Etapas</p><p className="font-medium">{detailData.etapas ?? '—'}</p></div>
+                            <div><p className="text-muted-foreground text-xs">Items solicitados</p><p className="font-medium">{detailData.cantidadItems ?? '—'}</p></div>
+                            <div><p className="text-muted-foreground text-xs">Cantidad de reclamos</p><p className="font-medium">{detailData.cantidadReclamos ?? '—'}</p></div>
+                            <div><p className="text-muted-foreground text-xs">Oferentes adjudicados</p><p className="font-medium">{detailData.adjudicacionNumeroOferentes ?? '—'}</p></div>
+                            <div className="col-span-2"><p className="text-muted-foreground text-xs">Días para el cierre</p><p className="font-medium">{detailData.diasCierreLicitacion ?? '—'}</p></div>
+                          </div>
+                        </div>
+
+                        {/* Enlace original */}
+                        {detailData.urlDetalle && (
+                          <div className="pt-2">
+                            <a
+                              href={detailData.urlDetalle}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 text-white px-4 py-3 text-sm font-medium hover:bg-indigo-700 transition-colors"
+                            >
+                              Ver Licitación en Mercado Público <ExternalLink className="h-4 w-4" />
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

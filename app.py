@@ -27,6 +27,7 @@ except ImportError:
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
 MP_API_BASE = "https://api.mercadopublico.cl/servicios/v1/publico"
+MP_API2_BASE = "https://api2.mercadopublico.cl"
 MP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json",
@@ -77,6 +78,31 @@ ESTADO_LIC_TO_API_PARAM = {
     "Adjudicada": "adjudicada",
     "Revocada": "revocada",
     "Suspendida": "suspendida",
+    "Activas": "activas",
+}
+
+# Map API query numeric codes → UI label
+ESTADO_LIC_QUERY_CODE_TO_LABEL = {
+    "5": "Publicada",
+    "6": "Cerrada",
+    "7": "Desierta",
+    "8": "Adjudicada",
+    "18": "Revocada",
+    "19": "Suspendida",
+}
+
+# Map normalized text aliases → UI label
+ESTADO_LIC_ALIAS_TO_LABEL = {
+    "publicada": "Publicada",
+    "cerrada": "Cerrada",
+    "desierta": "Desierta",
+    "adjudicada": "Adjudicada",
+    "revocada": "Revocada",
+    "suspendida": "Suspendida",
+    "activas": "Activas",
+    "activa": "Activas",
+    "todos": "Todos",
+    "todas": "Todos",
 }
 
 ESTADO_OC_BY_CODE = {
@@ -196,6 +222,38 @@ def _normalize_text(value: str) -> str:
     text = unicodedata.normalize("NFD", str(value).strip().lower())
     text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
     return " ".join(text.split())
+
+
+def _normalize_mp_date(raw: str) -> str:
+    """Return ddmmyyyy string if valid, else empty."""
+    if not raw:
+        return ""
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", cleaned):
+        cleaned = cleaned.replace("/", "")
+    if re.fullmatch(r"\d{8}", cleaned):
+        try:
+            datetime.strptime(cleaned, "%d%m%Y")
+            return cleaned
+        except ValueError:
+            return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", cleaned):
+        return _iso_to_mp_date(cleaned)
+    return ""
+
+
+def _normalize_estado_licitacion(raw: str) -> str:
+    if not raw:
+        return ""
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    if cleaned.isdigit():
+        return ESTADO_LIC_QUERY_CODE_TO_LABEL.get(cleaned, "")
+    normalized = _normalize_text(cleaned)
+    return ESTADO_LIC_ALIAS_TO_LABEL.get(normalized, "")
 
 
 def _first_non_empty(*values) -> str:
@@ -770,13 +828,17 @@ def _iso_to_mp_date(iso_date: str) -> str:
     return iso_date
 
 
-def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
+def _date_range_mp(fecha_inicio: str, fecha_fin: str) -> list[str]:
     """Build inclusive day-by-day date range in ddmmyyyy format."""
-    if not fecha_inicio_iso or not fecha_fin_iso:
+    if not fecha_inicio or not fecha_fin:
+        return []
+    start_raw = _normalize_mp_date(fecha_inicio)
+    end_raw = _normalize_mp_date(fecha_fin)
+    if not start_raw or not end_raw:
         return []
     try:
-        start = datetime.strptime(fecha_inicio_iso, "%Y-%m-%d")
-        end = datetime.strptime(fecha_fin_iso, "%Y-%m-%d")
+        start = datetime.strptime(start_raw, "%d%m%Y")
+        end = datetime.strptime(end_raw, "%d%m%Y")
     except ValueError:
         return []
     if end < start:
@@ -785,16 +847,18 @@ def _date_range_mp(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
     return [(start + timedelta(days=i)).strftime("%d%m%Y") for i in range(days)]
 
 
-def _build_query_dates(fecha_inicio_iso: str, fecha_fin_iso: str) -> list[str]:
+def _build_query_dates(fecha_inicio: str, fecha_fin: str) -> list[str]:
     """Build dates for API calls: range if provided, else a single selected/today day."""
-    if fecha_inicio_iso and fecha_fin_iso:
-        date_range = _date_range_mp(fecha_inicio_iso, fecha_fin_iso)
+    if fecha_inicio and fecha_fin:
+        date_range = _date_range_mp(fecha_inicio, fecha_fin)
         if date_range:
             return date_range
-    if fecha_inicio_iso:
-        return [_iso_to_mp_date(fecha_inicio_iso)]
-    if fecha_fin_iso:
-        return [_iso_to_mp_date(fecha_fin_iso)]
+    if fecha_inicio:
+        one = _normalize_mp_date(fecha_inicio)
+        return [one] if one else []
+    if fecha_fin:
+        one = _normalize_mp_date(fecha_fin)
+        return [one] if one else []
     return [_today_mp_date()]
 
 
@@ -864,10 +928,6 @@ def _apply_filters_and_sort(listado: list, args: dict) -> list:
     tipo = args.get("tipo", "")
     if tipo:
         listado = [r for r in listado if r["tipo"] == tipo]
-    region = args.get("region", "")
-    if region and region != "Todas":
-        region_norm = _normalize_text(region)
-        listado = [r for r in listado if region_norm in _normalize_text(r.get("region", ""))]
     sort_field = args.get("sortField", "fechaPublicacion")
     reverse = args.get("sortOrder", "desc") == "desc"
     if sort_field == "monto":
@@ -983,11 +1043,6 @@ def _apply_oc_filters_and_sort(listado: list, args: dict) -> list:
     if tipo:
         listado = [r for r in listado if r.get("tipo", "") == tipo]
 
-    region = args.get("region", "")
-    if region and region != "Todas":
-        region_norm = _normalize_text(region)
-        listado = [r for r in listado if region_norm in _normalize_text(r.get("region", ""))]
-
     sort_field = args.get("sortField", "codigo")
     reverse = args.get("sortOrder", "desc") == "desc"
     if sort_field == "monto":
@@ -1093,18 +1148,36 @@ def _run_oc_job(job_id: str, mp_params: dict, all_args: dict, ck: str, date_rang
 
 @app.route("/api/licitaciones")
 def get_licitaciones():
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = request.headers.get("X-MP-Ticket", "").strip() or request.args.get("ticket", "").strip()
     if not ticket:
         return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
 
     mp_params = {"ticket": ticket}
-    all_args = dict(request.args)
+    filter_args = dict(request.args)
+
+    busqueda = request.args.get("busqueda", "").strip()
+    codigo = request.args.get("codigo", "").strip()
+    tipo = request.args.get("tipo", "").strip()
+    region = request.args.get("region", "").strip()
+    sort_field = request.args.get("sortField", "").strip()
+    sort_order = request.args.get("sortOrder", "").strip()
+
+    base_cache_args = {}
+    if busqueda:
+        base_cache_args["busqueda"] = busqueda
+    if codigo:
+        base_cache_args["codigo"] = codigo
+    if tipo:
+        base_cache_args["tipo"] = tipo
+    if sort_field:
+        base_cache_args["sortField"] = sort_field
+    if sort_order:
+        base_cache_args["sortOrder"] = sort_order
 
     # --- Búsqueda por código específico (fast path, returns 1 result) ---
-    codigo = request.args.get("codigo", "").strip()
     if codigo:
         mp_params["codigo"] = codigo
-        ck = cache_key_from_params("lic", all_args)
+        ck = cache_key_from_params("lic", base_cache_args)
         cached = cache.get(ck)
         if cached is not None:
             return jsonify(cached)
@@ -1122,24 +1195,61 @@ def get_licitaciones():
         except requests.RequestException as e:
             return jsonify({"error": str(e)}), 502
         listado = [normalize_licitacion(l) for l in (data.get("Listado") or [])]
-        listado = _apply_filters_and_sort(listado, all_args)
+        listado = _apply_filters_and_sort(listado, filter_args)
         output = {"total": len(listado), "listado": listado}
         cache.set(ck, output)
         return jsonify(output)
 
     # --- Date range listing: API queried day-by-day in a background job ---
-    fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
-    fecha_fin_iso = request.args.get("fechaFin", "").strip()
-    query_dates = _build_query_dates(fecha_inicio_iso, fecha_fin_iso)
+    fecha_param = request.args.get("fecha", "").strip()
+    if fecha_param:
+        normalized_fecha = _normalize_mp_date(fecha_param)
+        if not normalized_fecha:
+            return jsonify({"error": "Fecha inválida. Usa ddmmaaaa o YYYY-MM-DD."}), 400
+        query_dates = [normalized_fecha]
+    else:
+        fecha_inicio = request.args.get("fechaInicio", "").strip()
+        fecha_fin = request.args.get("fechaFin", "").strip()
+        query_dates = _build_query_dates(fecha_inicio, fecha_fin)
+        if not query_dates:
+            return jsonify({"error": "Rango de fechas inválido."}), 400
     mp_params["fecha"] = query_dates[0]
 
-    estado = request.args.get("estado", "")
-    if estado and estado != "Todos":
-        api_estado = ESTADO_LIC_TO_API_PARAM.get(estado)
+    estado_raw = request.args.get("estado", "").strip()
+    estado_label = _normalize_estado_licitacion(estado_raw)
+    if estado_raw and not estado_label:
+        return jsonify({"error": "Estado inválido. Usa nombre, código o 'activas'."}), 400
+    if estado_label and estado_label != "Todos":
+        api_estado = ESTADO_LIC_TO_API_PARAM.get(estado_label)
         if api_estado:
             mp_params["estado"] = api_estado
 
-    ck = cache_key_from_params("lic", all_args)
+    codigo_organismo = request.args.get("CodigoOrganismo", "").strip()
+    if not codigo_organismo:
+        codigo_organismo = request.args.get("codigoOrganismo", "").strip()
+    if codigo_organismo:
+        mp_params["CodigoOrganismo"] = codigo_organismo
+
+    codigo_proveedor = request.args.get("CodigoProveedor", "").strip()
+    if not codigo_proveedor:
+        codigo_proveedor = request.args.get("codigoProveedor", "").strip()
+    if codigo_proveedor:
+        mp_params["CodigoProveedor"] = codigo_proveedor
+
+    cache_args = dict(base_cache_args)
+    if estado_label and estado_label != "Todos":
+        cache_args["estado"] = estado_label
+    if len(query_dates) > 1:
+        cache_args["fechaInicio"] = query_dates[0]
+        cache_args["fechaFin"] = query_dates[-1]
+    else:
+        cache_args["fecha"] = query_dates[0]
+    if codigo_organismo:
+        cache_args["CodigoOrganismo"] = codigo_organismo
+    if codigo_proveedor:
+        cache_args["CodigoProveedor"] = codigo_proveedor
+
+    ck = cache_key_from_params("lic", cache_args)
     cached = cache.get(ck)
     if cached is not None:
         return jsonify(cached)
@@ -1154,7 +1264,7 @@ def get_licitaciones():
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {"status": "pending", "ck": ck, "ts": time.time()}
 
-    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, all_args, ck, query_dates), daemon=True)
+    t = threading.Thread(target=_run_lic_job, args=(job_id, mp_params, filter_args, ck, query_dates), daemon=True)
     t.start()
     return jsonify({"status": "pending", "jobId": job_id}), 202
 
@@ -1223,10 +1333,13 @@ def get_ordenes_compra():
     # --- Listing by date range (day-by-day) + optional estado ---
     params = {"ticket": ticket}
     all_args = dict(request.args)
+    all_args.pop("region", None)
 
     fecha_inicio_iso = request.args.get("fechaInicio", "").strip()
     fecha_fin_iso = request.args.get("fechaFin", "").strip()
     query_dates = _build_query_dates(fecha_inicio_iso, fecha_fin_iso)
+    if not query_dates:
+        return jsonify({"error": "Rango de fechas inválido."}), 400
     params["fecha"] = query_dates[0]
 
     estado = request.args.get("estado", "")
@@ -1256,7 +1369,7 @@ def get_ordenes_compra():
 @app.route("/api/licitacion/<codigo>")
 def get_licitacion_detail(codigo):
     """Fetch full details for a single licitacion by its code."""
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = request.headers.get("X-MP-Ticket", "").strip() or request.args.get("ticket", "").strip()
     if not ticket:
         return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("lic_detail", {"codigo": codigo})
@@ -1280,7 +1393,7 @@ def get_licitacion_detail(codigo):
 @app.route("/api/orden-compra/<path:codigo>")
 def get_orden_compra_detail(codigo):
     """Fetch full details for a single OC by its code."""
-    ticket = request.headers.get("X-MP-Ticket", "").strip()
+    ticket = request.headers.get("X-MP-Ticket", "").strip() or request.args.get("ticket", "").strip()
     if not ticket:
         return jsonify({"error": "API key no configurada"}), 401
     ck = cache_key_from_params("oc_detail", {"codigo": codigo})
@@ -1299,6 +1412,426 @@ def get_orden_compra_detail(codigo):
     result = normalize_orden_compra(raw_list[0])
     cache.set(ck, result)
     return jsonify(result)
+
+
+def call_mp_api2(path: str, params: dict, ticket: str, retries: int = MP_MAX_RETRIES):
+    """Call Mercado Público API v2 (Compra Ágil) with exponential retry, jitter and circuit breaker."""
+
+    def _request_with_retry():
+        last_err = None
+        max_attempts = 1 + max(0, retries)
+        headers = {**MP_HEADERS, "ticket": ticket}
+
+        for attempt in range(max_attempts):
+            try:
+                _throttle_mp_api()
+                resp = requests.get(
+                    f"{MP_API2_BASE}{path}",
+                    params=params,
+                    headers=headers,
+                    timeout=90,
+                    verify=False,
+                )
+
+                if _is_retryable_status(resp.status_code):
+                    raise requests.HTTPError(f"Error HTTP {resp.status_code}", response=resp)
+
+                resp.raise_for_status()
+                data = resp.json()
+
+                if isinstance(data, dict) and data.get("success") == "NOK":
+                    errors = data.get("errors") or []
+                    first_err = errors[0] if errors else {}
+                    codigo = str(first_err.get("codigo", ""))
+                    mensaje = first_err.get("mensaje", "Error desconocido")
+                    if codigo == "429":
+                        fake_resp = type("R", (), {"status_code": 429})()
+                        raise requests.HTTPError(f"Rate limited: {mensaje}", response=fake_resp)
+                    raise RuntimeError(f"API error {codigo}: {mensaje}")
+
+                return data
+
+            except requests.HTTPError as e:
+                status_code = getattr(getattr(e, "response", None), "status_code", 0)
+                last_err = e
+                if attempt < max_attempts - 1 and _is_retryable_status(status_code):
+                    time.sleep(_backoff_seconds(attempt))
+                    continue
+                raise
+
+            except (requests.Timeout, requests.ConnectionError, requests.RequestException, ValueError) as e:
+                last_err = e
+                if attempt < max_attempts - 1:
+                    time.sleep(_backoff_seconds(attempt))
+                    continue
+                raise
+
+        raise last_err or RuntimeError("Max retries exceeded")
+
+    return mp_circuit_breaker.call(_request_with_retry)
+
+
+ESTADO_CA_LABEL = {
+    "publicada": "Publicada",
+    "cerrada": "Cerrada",
+    "desierta": "Desierta",
+    "cancelada": "Cancelada",
+    "proveedor_seleccionado": "Proveedor Seleccionado",
+    "oc_emitida": "OC Emitida",
+}
+
+
+def normalize_compra_agil_item(item: dict) -> dict:
+    """Normalize a Compra Ágil list item to a flat, frontend-friendly dict."""
+    estado = item.get("estado") or {}
+    convocatoria = item.get("convocatoria") or {}
+    fechas = item.get("fechas") or {}
+    montos = item.get("montos") or {}
+    institucion = item.get("institucion") or {}
+    resumen = item.get("resumen") or {}
+    motivos = item.get("motivos") or {}
+    links = item.get("links") or {}
+
+    estado_codigo = estado.get("codigo", "")
+    estado_glosa = estado.get("glosa") or ESTADO_CA_LABEL.get(estado_codigo, estado_codigo)
+
+    region_code = institucion.get("region")
+    region_name = institucion.get("nombre_region") or ""
+    if not region_name and region_code:
+        region_name = REGION_CODE_TO_NAME.get(str(region_code), "")
+
+    return {
+        "codigo": item.get("codigo", ""),
+        "nombre": item.get("nombre", ""),
+        "estadoCodigo": estado_codigo,
+        "estadoGlosa": estado_glosa,
+        "llamado": convocatoria.get("estado_convocatoria", 1),
+        "descripcionLlamado": convocatoria.get("descripcion", ""),
+        "fechaPublicacion": (fechas.get("fecha_publicacion") or "")[:10],
+        "fechaCierre": (fechas.get("fecha_cierre") or "")[:10],
+        "fechaUltimoCambio": (fechas.get("fecha_ultimo_cambio") or "")[:10],
+        "moneda": montos.get("moneda", "CLP"),
+        "monto": float(montos.get("monto_disponible_clp") or montos.get("monto_disponible") or 0),
+        "organismo": institucion.get("organismo_comprador", ""),
+        "rutOrganismo": institucion.get("rut", ""),
+        "unidadCompra": institucion.get("unidad_compra", ""),
+        "region": _normalize_region(region_name or str(region_code or "")),
+        "regionCode": region_code,
+        "totalOfertas": resumen.get("total_ofertas_recibidas", 0),
+        "motivoCancelacion": motivos.get("motivo_cancelacion") or "",
+        "motivoDesierta": motivos.get("motivo_desierta") or "",
+        "motivoSeleccion": motivos.get("motivo_seleccion") or "",
+        "urlDetalle": links.get("detalle") or f"/v2/compra-agil/{item.get('codigo', '')}",
+    }
+
+
+def normalize_compra_agil_detail(payload: dict) -> dict:
+    """Normalize full Compra Ágil detail response."""
+    base = normalize_compra_agil_item(payload)
+    presupuesto = payload.get("presupuesto") or {}
+    entrega = payload.get("entrega") or {}
+    orden_compra = payload.get("orden_compra") or {}
+    flags = payload.get("flags") or {}
+    convocatoria = payload.get("convocatoria") or {}
+
+    proveedores = []
+    for prov in payload.get("proveedores_cotizando") or []:
+        proveedores.append({
+            "rut": prov.get("rut_proveedor", ""),
+            "razonSocial": prov.get("razon_social", ""),
+            "esEmt": bool(prov.get("es_emt", False)),
+            "valorNeto": float(prov.get("valor_neto") or 0),
+            "montoTotal": float(prov.get("monto_total") or 0),
+            "montoDespacho": float(prov.get("monto_despacho") or 0),
+            "totalImpuesto": float(prov.get("total_impuesto") or 0),
+            "estadoCotizacion": (prov.get("estado_por_comprador") or ""),
+            "seleccionado": bool((prov.get("seleccion") or {}).get("proveedor_seleccionado", False)),
+            "activo": bool(prov.get("activo", True)),
+            "descripcionCotizacion": prov.get("descripcion_cotizacion") or "",
+        })
+
+    productos = []
+    for prod in payload.get("productos_solicitados") or []:
+        productos.append({
+            "codigoProducto": prod.get("codigo_producto", ""),
+            "nombre": prod.get("nombre", ""),
+            "descripcion": prod.get("descripcion") or "",
+            "cantidad": float(prod.get("cantidad") or 0),
+            "unidadMedida": prod.get("unidad_medida", ""),
+        })
+
+    base.update({
+        "descripcion": payload.get("descripcion", ""),
+        "presupuestoEstimado": float(presupuesto.get("presupuesto_estimado") or 0),
+        "tipoPresupuesto": presupuesto.get("tipo_presupuesto") or "",
+        "direccionEntrega": entrega.get("direccion_entrega") or "",
+        "plazoEntregaDias": entrega.get("plazo_entrega_dias"),
+        "idOrdenCompra": orden_compra.get("id_orden_compra"),
+        "idOC": orden_compra.get("id_oc"),
+        "codigoOrdenCompra": orden_compra.get("codigo_orden_compra"),
+        "estadoOrdenCompra": orden_compra.get("estado_orden_compra"),
+        "tieneOC": orden_compra.get("id_orden_compra") is not None,
+        "fechaCierrePrimerLlamado": (convocatoria.get("fecha_cierre_primer_llamado") or "")[:10],
+        "fechaCierreSegundoLlamado": (convocatoria.get("fecha_cierre_segundo_llamado") or "")[:10],
+        "consideraMedioAmbiental": bool(flags.get("considera_requisitos_medioambientales", False)),
+        "consideraImpactoSocial": bool(flags.get("considera_requisitos_impacto_social_economico", False)),
+        "proveedoresCotizando": proveedores,
+        "productosSolicitados": productos,
+    })
+    return base
+
+
+@app.route("/api/compra-agil")
+def get_compra_agil():
+    """Search/list Compras Ágiles using the v2 API with full filtering and pagination."""
+    ticket = request.headers.get("X-MP-Ticket", "").strip() or request.args.get("ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada. Ingresa tu ticket en la configuración."}), 401
+
+    # Build API params
+    api_params = {}
+
+    # Time window filters (Grupo 1)
+    ttl_cambio_ms = request.args.get("ttl_cambio_ms", "").strip()
+    cambio_desde = request.args.get("cambio_desde", "").strip()
+    cambio_hasta = request.args.get("cambio_hasta", "").strip()
+    publicado_desde = request.args.get("publicado_desde", "").strip()
+    publicado_hasta = request.args.get("publicado_hasta", "").strip()
+
+    if ttl_cambio_ms:
+        try:
+            api_params["ttl_cambio_ms"] = int(ttl_cambio_ms)
+        except ValueError:
+            pass
+    elif cambio_desde or cambio_hasta:
+        if cambio_desde:
+            api_params["cambio_desde"] = cambio_desde
+        if cambio_hasta:
+            api_params["cambio_hasta"] = cambio_hasta
+    elif publicado_desde or publicado_hasta:
+        if publicado_desde:
+            # Convert YYYY-MM-DD to ISO-8601
+            if len(publicado_desde) == 10:
+                api_params["publicado_desde"] = publicado_desde + "T00:00:00Z"
+            else:
+                api_params["publicado_desde"] = publicado_desde
+        if publicado_hasta:
+            if len(publicado_hasta) == 10:
+                api_params["publicado_hasta"] = publicado_hasta + "T23:59:59Z"
+            else:
+                api_params["publicado_hasta"] = publicado_hasta
+    else:
+        # Default: last 7 days
+        api_params["ttl_cambio_ms"] = 7 * 24 * 60 * 60 * 1000
+
+    # Estado filter (Grupo 3) - can be comma-separated
+    estado = request.args.get("estado", "").strip()
+    if estado:
+        api_params["estado"] = estado
+
+    # Region filter (Grupo 4) - can be comma-separated numeric codes
+    region = request.args.get("region", "").strip()
+    if region:
+        # Convert region name to code if needed
+        region_parts = []
+        for r in region.split(","):
+            r = r.strip()
+            if r.isdigit():
+                region_parts.append(r)
+            else:
+                # Try to map name to code
+                r_norm = _normalize_text(r)
+                for code, name in REGION_CODE_TO_NAME.items():
+                    if _normalize_text(name) == r_norm or r_norm in _normalize_text(name):
+                        region_parts.append(code)
+                        break
+        if region_parts:
+            api_params["region"] = ",".join(region_parts)
+
+    # Keyword search (Grupo 5)
+    q = request.args.get("q", "").strip()
+    codigo_ca = request.args.get("id", "").strip()
+    if codigo_ca:
+        api_params["id"] = codigo_ca
+    elif q:
+        api_params["q"] = q
+
+    # Pagination (Grupo 6)
+    tamano_pagina = min(50, max(1, int(request.args.get("tamano_pagina", "50") or 50)))
+    numero_pagina = max(1, int(request.args.get("numero_pagina", "1") or 1))
+    api_params["tamano_pagina"] = tamano_pagina
+    api_params["numero_pagina"] = numero_pagina
+
+    # Sort (Grupo 7)
+    ordenar_por = request.args.get("ordenar_por", "FechaPublicacion").strip()
+    if ordenar_por:
+        api_params["ordenar_por"] = ordenar_por
+
+    # Cache
+    ck = cache_key_from_params("ca_list", {**api_params})
+    cached = cache.get(ck)
+    if cached is not None:
+        return jsonify(cached)
+
+    try:
+        data = call_mp_api2("/v2/compra-agil", api_params, ticket)
+    except requests.Timeout:
+        return jsonify({"error": "La API de Compra Ágil tardó demasiado"}), 504
+    except requests.HTTPError as e:
+        code = getattr(getattr(e, "response", None), "status_code", 502)
+        if code == 429:
+            return jsonify({"error": "Cuota diaria agotada. Intenta mañana o usa un ticket con mayor límite."}), 429
+        return jsonify({"error": f"Error HTTP {code} de la API"}), 502
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 502
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 502
+
+    payload = data.get("payload") or {}
+    items_raw = payload.get("items") or []
+    paginacion = payload.get("paginacion") or {}
+
+    # Client-side busqueda filter (keyword on organismo)
+    busqueda = request.args.get("busqueda", "").strip().lower()
+    items = [normalize_compra_agil_item(i) for i in items_raw]
+    if busqueda:
+        items = [
+            i for i in items
+            if busqueda in i["nombre"].lower()
+            or busqueda in i["organismo"].lower()
+            or busqueda in i["codigo"].lower()
+        ]
+
+    output = {
+        "total": paginacion.get("total_resultados", len(items)),
+        "totalPaginas": paginacion.get("total_paginas", 1),
+        "numeroPagina": paginacion.get("numero_pagina", numero_pagina),
+        "tamanoPagina": paginacion.get("tamano_pagina", tamano_pagina),
+        "listado": items,
+    }
+    cache.set(ck, output)
+    return jsonify(output)
+
+
+@app.route("/api/compra-agil/<path:codigo>")
+def get_compra_agil_detail(codigo):
+    """Fetch full detail for a single Compra Ágil by its code."""
+    ticket = request.headers.get("X-MP-Ticket", "").strip() or request.args.get("ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada"}), 401
+    ck = cache_key_from_params("ca_detail", {"codigo": codigo})
+    cached = cache.get(ck)
+    if cached is not None:
+        return jsonify(cached)
+    try:
+        data = call_mp_api2(f"/v2/compra-agil/{codigo}", {}, ticket)
+    except requests.Timeout:
+        return jsonify({"error": "Timeout"}), 504
+    except (requests.HTTPError, RuntimeError, requests.RequestException) as e:
+        return jsonify({"error": str(e)}), 502
+    payload = data.get("payload")
+    if not payload:
+        return jsonify({"error": "No encontrada"}), 404
+    result = normalize_compra_agil_detail(payload)
+    cache.set(ck, result)
+    return jsonify(result)
+
+
+@app.route("/api/compra-agil-analytics")
+def get_compra_agil_analytics():
+    """Returns aggregated market analytics from Compra Ágil results."""
+    ticket = request.headers.get("X-MP-Ticket", "").strip() or request.args.get("ticket", "").strip()
+    if not ticket:
+        return jsonify({"error": "API key no configurada"}), 401
+
+    # Fetch up to 3 pages of data (150 records) for analytics
+    all_items = []
+    for page in range(1, 4):
+        api_params = {
+            "ttl_cambio_ms": 30 * 24 * 60 * 60 * 1000,  # last 30 days
+            "tamano_pagina": 50,
+            "numero_pagina": page,
+            "ordenar_por": "FechaPublicacion",
+        }
+
+        # Apply any filters from request
+        estado = request.args.get("estado", "").strip()
+        if estado:
+            api_params["estado"] = estado
+        region = request.args.get("region", "").strip()
+        if region and region.isdigit():
+            api_params["region"] = region
+        q = request.args.get("q", "").strip()
+        if q:
+            api_params["q"] = q
+
+        ck = cache_key_from_params("ca_analytics", {**api_params})
+        cached = cache.get(ck)
+        if cached is not None:
+            batch = cached
+        else:
+            try:
+                data = call_mp_api2("/v2/compra-agil", api_params, ticket)
+                payload = data.get("payload") or {}
+                batch_raw = payload.get("items") or []
+                paginacion = payload.get("paginacion") or {}
+                batch = [normalize_compra_agil_item(i) for i in batch_raw]
+                cache.set(ck, batch)
+                if page >= paginacion.get("total_paginas", 1):
+                    all_items.extend(batch)
+                    break
+            except Exception:
+                break
+        all_items.extend(batch)
+
+    # Build analytics
+    total_monto = sum(i["monto"] for i in all_items if i["monto"])
+    total_ofertas = sum(i["totalOfertas"] for i in all_items)
+
+    # By estado
+    by_estado: dict = {}
+    for i in all_items:
+        k = i["estadoGlosa"]
+        by_estado.setdefault(k, {"count": 0, "monto": 0})
+        by_estado[k]["count"] += 1
+        by_estado[k]["monto"] += i["monto"]
+
+    # By region
+    by_region: dict = {}
+    for i in all_items:
+        k = i["region"] or "Sin región"
+        by_region.setdefault(k, {"count": 0, "monto": 0})
+        by_region[k]["count"] += 1
+        by_region[k]["monto"] += i["monto"]
+
+    # By organismo (top 10)
+    by_organismo: dict = {}
+    for i in all_items:
+        k = i["organismo"] or "Sin organismo"
+        by_organismo.setdefault(k, {"count": 0, "monto": 0})
+        by_organismo[k]["count"] += 1
+        by_organismo[k]["monto"] += i["monto"]
+    top_organismos = sorted(by_organismo.items(), key=lambda x: x[1]["monto"], reverse=True)[:10]
+
+    # By date (last 30 days trend)
+    by_date: dict = {}
+    for i in all_items:
+        k = i["fechaPublicacion"][:7] if i["fechaPublicacion"] else "Sin fecha"  # YYYY-MM
+        by_date.setdefault(k, {"count": 0, "monto": 0})
+        by_date[k]["count"] += 1
+        by_date[k]["monto"] += i["monto"]
+
+    return jsonify({
+        "totalProcesos": len(all_items),
+        "totalMonto": total_monto,
+        "totalOfertas": total_ofertas,
+        "promedioOfertas": round(total_ofertas / len(all_items), 2) if all_items else 0,
+        "promedioMonto": round(total_monto / len(all_items), 2) if all_items else 0,
+        "byEstado": [{"estado": k, **v} for k, v in by_estado.items()],
+        "byRegion": sorted([{"region": k, **v} for k, v in by_region.items()], key=lambda x: x["monto"], reverse=True),
+        "topOrganismos": [{"organismo": k, **v} for k, v in top_organismos],
+        "tendenciaMensual": sorted([{"mes": k, **v} for k, v in by_date.items()], key=lambda x: x["mes"]),
+    })
 
 
 # ── Static / SPA ─────────────────────────────────────────────────────────────
